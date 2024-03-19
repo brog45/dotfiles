@@ -145,3 +145,7 @@ if grep -q "microsoft" /proc/version > /dev/null 2>&1; then
     fi
 fi
 
+if [ -x /usr/bin/terraform ]; then
+    complete -C /usr/bin/terraform terraform
+fi
+
