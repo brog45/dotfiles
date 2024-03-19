@@ -128,7 +128,10 @@ PATH="$NPM_PACKAGES/bin:$PATH"
 unset MANPATH # delete if you already modified MANPATH elsewhere in your config
 export MANPATH="$NPM_PACKAGES/share/man:$(manpath)"
 
-source "$HOME/.cargo/env"
+if [ -r "$HOME/.cargo/env" ]; then
+    source "$HOME/.cargo/env"
+fi
+
 if which starship > /dev/null; then 
     eval "$(starship init bash)"
 fi
