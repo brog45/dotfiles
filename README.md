@@ -24,6 +24,9 @@ First, check out the `dotfiles` repo in your `$HOME` directory using `git`
 
 ```
 cd $HOME
+mkdir .cargo
+mkdir .config
+mkdir bin
 git clone https://github.com/brog45/dotfiles.git
 cd dotfiles
 ```
@@ -31,5 +34,5 @@ cd dotfiles
 then use GNU `stow` to create symlinks
 
 ```
-stow .
+stow -vv .
 ```
