@@ -152,3 +152,9 @@ if [ -x /usr/bin/terraform ]; then
     complete -C /usr/bin/terraform terraform
 fi
 
+# local scripts can go in this directory
+if [ -d $HOME/.bashrc.d ]; then
+    for s in $HOME/.bashrc.d/*; do
+        source "$s"
+    done
+fi
