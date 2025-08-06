@@ -1,0 +1,6 @@
+#!/bin/bash
+# Based on https://stackoverflow.com/a/20388399 
+(
+     cat | tee /dev/fd/3 | head -n 15
+     echo ----
+) 3> >( tail -n 15 )
