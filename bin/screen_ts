@@ -1,0 +1,8 @@
+#!/bin/bash 
+# from https://askubuntu.com/a/1232061
+
+set -e
+
+convert x: -modulate 100,0 -resize 400% -set density 300 png:- |
+  tesseract stdin stdout -l eng --psm 3 | 
+  sed 's/'$(printf '%b' '\014')'//g;s/|/I/g'
