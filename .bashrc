@@ -131,6 +131,8 @@ if [ which manpath 2> /dev/null ]; then
     export MANPATH="$NPM_PACKAGES/share/man:$(manpath)"
 fi
 
+PATH="$HOME/.local/bin:$PATH"
+
 if [ -r "$HOME/.cargo/env" ]; then
     source "$HOME/.cargo/env"
 fi
