@@ -5,10 +5,29 @@ EXT_DIR="$HOME/.local/share/sefi-title-extension"
 PROFILE_DIR="$HOME/.var/app/org.chromium.Chromium/data/sefi-laptop-profile"
 URL='https://glkvm.lan/#/'
 
+resolver_args=()
+if ! getent hosts glkvm.lan >/dev/null 2>&1; then
+    # fall back to tailscale when the .lan FQDN doesn't resolve
+    suffix=$(tailscale status --json 2>/dev/null \
+        | grep -oP '"MagicDNSSuffix"\s*:\s*"\K[^"]+' | head -1)
+    if [[ -z "${suffix:-}" ]]; then
+        echo "sefi-laptop: glkvm.lan unreachable and tailscale suffix not found" >&2
+        exit 1
+    fi
+    ts_host="glkvm.$suffix"
+    ts_ip=$(getent hosts "$ts_host" | awk '{print $1; exit}')
+    if [[ -z "$ts_ip" ]]; then
+        echo "sefi-laptop: could not resolve $ts_host" >&2
+        exit 1
+    fi
+    resolver_args=(--host-resolver-rules="MAP glkvm.lan $ts_ip")
+fi
+
 exec flatpak run org.chromium.Chromium \
     --user-data-dir="$PROFILE_DIR" \
     --load-extension="$EXT_DIR" \
     --disable-extensions-except="$EXT_DIR" \
     --test-type \
     --ignore-certificate-errors \
+    "${resolver_args[@]}" \
     "--app=$URL"
