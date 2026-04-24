@@ -6,11 +6,9 @@ PROFILE_DIR="$HOME/.var/app/org.chromium.Chromium/data/sefi-laptop-profile"
 URL='https://glkvm.lan/#/'
 
 exec flatpak run org.chromium.Chromium \
-    --ozone-platform=x11 \
     --user-data-dir="$PROFILE_DIR" \
     --load-extension="$EXT_DIR" \
     --disable-extensions-except="$EXT_DIR" \
     --test-type \
     --ignore-certificate-errors \
-    "--app=$URL" \
-    --class=sefi-laptop
+    "--app=$URL"
