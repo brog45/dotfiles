@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=SEFI Laptop
+Comment=Web console for SEFI Laptop
+Exec=/home/brogers/bin/sefi-laptop
+Icon=/home/brogers/.local/share/icons/sefi-laptop.svg
+Terminal=false
+StartupWMClass=chrome-glkvm.lan__-Default
+Categories=Network;
