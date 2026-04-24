@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "SEFI Laptop Title Override",
+  "version": "1.0",
+  "description": "Locks the page title to \"SEFI Laptop\" on the SEFI KVM web UI.",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://glkvm/*",
+        "https://glkvm.lan/*",
+        "https://glkvm.local/*",
+        "https://*.ts.net/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ]
+}
