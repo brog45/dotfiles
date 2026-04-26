@@ -2,8 +2,29 @@
 set -euo pipefail
 
 EXT_DIR="$HOME/.local/share/sefi-title-extension"
-PROFILE_DIR="$HOME/.var/app/org.chromium.Chromium/data/sefi-laptop-profile"
 URL='https://glkvm.lan/#/'
+
+TRYAPPS="org.chromium.Chromium com.google.Chrome"
+
+APPID=''
+for TRY in $TRYAPPS; do
+    echo Checking $TRY
+    if flatpak info -l $TRY &> /dev/null; then
+        APPID=$TRY
+        break
+    fi
+done
+
+if [[ -z "$APPID" ]]; then
+    exec >&2
+    echo "Install one of the following:"
+    for TRY in $TRYAPPS; do
+        echo "  * $TRY"
+    done
+    exit 1
+else
+    echo Found $APPID
+fi
 
 resolver_args=()
 if ! getent hosts glkvm.lan >/dev/null 2>&1; then
@@ -23,7 +44,11 @@ if ! getent hosts glkvm.lan >/dev/null 2>&1; then
     resolver_args=(--host-resolver-rules="MAP glkvm.lan $ts_ip")
 fi
 
-exec flatpak run org.chromium.Chromium \
+PROFILE_DIR="$HOME/.var/app/$APPID/data/sefi-laptop-profile"
+
+mkdir -p "$PROFILE_DIR"
+
+exec flatpak run $APPID \
     --user-data-dir="$PROFILE_DIR" \
     --load-extension="$EXT_DIR" \
     --disable-extensions-except="$EXT_DIR" \
