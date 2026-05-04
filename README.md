@@ -42,3 +42,15 @@ Additional packages (e.g. machine-specific configs) can be stowed the same way:
 ```
 stow -vv <package-name>
 ```
+
+## Installing VS Code extensions
+
+`vscode-extensions.txt` contains a list of VS Code extensions generated using this command:
+```bash
+code --list-extensions > vscode-extensions.txt
+```
+
+Use this command to restore extensions:
+```bash
+cat vscode-extensions.txt | xargs -L1 code --install-extension
+```
