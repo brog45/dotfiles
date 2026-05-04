@@ -31,8 +31,14 @@ git clone https://github.com/brog45/dotfiles.git
 cd dotfiles
 ```
 
-then use GNU `stow` to create symlinks
+then use GNU `stow` to create symlinks for the base package (in the `base` subdirectory).
 
 ```
-stow -vv .
+stow -vv base
+```
+
+Additional packages (e.g. machine-specific configs) can be stowed the same way:
+
+```
+stow -vv <package-name>
 ```
