@@ -4,34 +4,27 @@ This directory contains the dotfiles for my system
 
 ## Requirements
 
-Ensure you have the following installed on your system
-
-### Git
-
-```
-sudo apt install git
-```
-
-### Stow
+Ensure you have the following installed on your system:
+* git
+* stow
 
 ```
-sudo apt install stow
+sudo apt install git stow
 ```
 
 ## Installation
 
-First, check out the `dotfiles` repo in your `$HOME` directory using `git`
+First, check out the `dotfiles` repo in your `$HOME` directory using `git`.
 
 ```
-cd $HOME
-mkdir .cargo
-mkdir .config
-mkdir bin
-git clone https://github.com/brog45/dotfiles.git
-cd dotfiles
+mkdir ~/.cargo
+mkdir ~/.config
+mkdir ~/bin
+git clone https://github.com/brog45/dotfiles.git ~/dotfiles
+cd ~/dotfiles
 ```
 
-then use GNU `stow` to create symlinks for the base package (in the `base` subdirectory).
+Then use GNU `stow` to create symlinks for the base package (in the `base` subdirectory).
 
 ```
 stow -vv base
