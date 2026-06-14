@@ -36,6 +36,22 @@ Additional packages (e.g. machine-specific configs) can be stowed the same way:
 stow -vv <package-name>
 ```
 
+## Installing packages
+
+`packages.txt` contains a list of additional packages to install.
+
+```bash
+sudo apt install $(cat packages.txt)
+```
+
+## Installing VS Code
+
+VS Code isn't in the default apt repos. The `install-vscode` script adds Microsoft's repo and installs the `code` package.
+
+```bash
+install-vscode
+```
+
 ## Installing VS Code extensions
 
 `vscode-extensions.txt` contains a list of VS Code extensions generated using this command:

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Install VS Code by adding Microsoft's apt repo, then installing the `code` package.
+set -euo pipefail
+
+sudo apt install -y wget gpg
+
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+
+wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > "$tmp"
+sudo install -D -o root -g root -m 644 "$tmp" /usr/share/keyrings/packages.microsoft.gpg
+arch="$(dpkg --print-architecture)"
+echo "deb [arch=${arch} signed-by=/usr/share/keyrings/packages.microsoft.gpg] https://packages.microsoft.com/repos/code stable main" \
+  | sudo tee /etc/apt/sources.list.d/vscode.list > /dev/null
+
+sudo apt update
+sudo apt install -y code
