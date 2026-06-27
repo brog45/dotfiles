@@ -33,4 +33,7 @@ set ttimeout
 set ttimeoutlen=100
 set wildmenu
 colorscheme koehler
+if has("gui_running")
+    set guifont=Ubuntu_Mono:h16:cANSI:qDRAFT
+endif
 " vim: set ft=vim :
