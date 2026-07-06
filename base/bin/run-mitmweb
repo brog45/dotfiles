@@ -1,0 +1,4 @@
+#!/usr/bin/bash
+exec docker run --rm -it \
+    -v ~/.mitmproxy:/home/mitmproxy/.mitmproxy \
+    --net=host mitmproxy/mitmproxy mitmweb --ssl-insecure
