@@ -1,0 +1,446 @@
+#!/usr/bin/env python3
+"""Update the tilde text editor's color attributes to match the active
+VSCode color theme.
+
+Reads ~/.config/Code/User/settings.json to find the current theme,
+locates its JSON definition (built-in or extension), resolves include
+chains and workbench.colorCustomizations, maps the workbench colors to
+tilde attributes (snapped to the nearest xterm-256 color), and rewrites
+the attribute lines in the tilde config in place.
+
+Usage: vscode-theme-to-tilde [-n|--dry-run] [tilde-config-path]
+"""
+
+import argparse
+import glob
+import json
+import os
+import re
+import sys
+
+SETTINGS = os.path.expanduser("~/.config/Code/User/settings.json")
+TILDE_CONFIG = os.path.expanduser("~/.config/tilde/config")
+
+BUILTIN_EXTENSION_DIRS = [
+    "/usr/share/code/resources/app/extensions",
+    "/opt/visual-studio-code/resources/app/extensions",
+    "/snap/code/current/usr/share/code/resources/app/extensions",
+    os.path.expanduser("~/.vscode/extensions"),
+]
+
+# VSCode fills in colors a theme doesn't define from built-in defaults;
+# approximations of those defaults for keys we use.
+DEFAULTS = {
+    "dark": {
+        "editor.background": "#1E1E1E",
+        "editor.foreground": "#BBBBBB",
+        "editor.selectionBackground": "#264F78",
+        "editorCursor.foreground": "#AEAFAD",
+        "editorWhitespace.foreground": "#E3E4E229",
+        "editorBracketMatch.border": "#888888",
+        "editorWidget.background": "#252526",
+        "editorWidget.foreground": "#CCCCCC",
+        "dropdown.background": "#3C3C3C",
+        "titleBar.activeBackground": "#3C3C3C",
+        "titleBar.activeForeground": "#CCCCCC",
+        "foreground": "#CCCCCC",
+        "menu.foreground": "#F0F0F0",
+        "list.activeSelectionBackground": "#094771",
+        "list.activeSelectionForeground": "#FFFFFF",
+        "button.background": "#0E639C",
+        "button.foreground": "#FFFFFF",
+        "textLink.foreground": "#3794FF",
+        "focusBorder": "#007FD4",
+        "descriptionForeground": "#CCCCCCB3",
+        "scrollbarSlider.background": "#79797966",
+        "widget.shadow": "#0000005C",
+    },
+    "light": {
+        "editor.background": "#FFFFFF",
+        "editor.foreground": "#333333",
+        "editor.selectionBackground": "#ADD6FF",
+        "editorCursor.foreground": "#000000",
+        "editorWhitespace.foreground": "#33333333",
+        "editorBracketMatch.border": "#B9B9B9",
+        "editorWidget.background": "#F3F3F3",
+        "editorWidget.foreground": "#616161",
+        "dropdown.background": "#FFFFFF",
+        "titleBar.activeBackground": "#DDDDDD",
+        "titleBar.activeForeground": "#333333",
+        "foreground": "#616161",
+        "menu.foreground": "#616161",
+        "list.activeSelectionBackground": "#0060C0",
+        "list.activeSelectionForeground": "#FFFFFF",
+        "button.background": "#007ACC",
+        "button.foreground": "#FFFFFF",
+        "textLink.foreground": "#006AB1",
+        "focusBorder": "#0090F1",
+        "descriptionForeground": "#717171",
+        "scrollbarSlider.background": "#64646466",
+        "widget.shadow": "#00000029",
+    },
+}
+
+
+# tilde/libt3highlight syntax style -> TextMate scopes to try, best first.
+# Note: markdown maps headings to "misc" and code spans/blocks to
+# "comment-keyword", so those scopes lead their chains.
+HIGHLIGHT_SCOPES = {
+    "comment": ["comment"],
+    "comment-keyword": ["markup.inline.raw", "markup.raw",
+                        "comment.documentation", "comment"],
+    "keyword": ["keyword", "storage"],
+    "number": ["constant.numeric", "constant"],
+    "string": ["string"],
+    "string-escape": ["constant.character.escape", "string.regexp",
+                      "constant.character", "string"],
+    "misc": ["markup.heading", "meta.preprocessor", "keyword.control",
+             "keyword"],
+    "variable": ["variable", "entity.name.function"],
+    "error": ["invalid"],
+    "addition": ["markup.inserted"],
+    "deletion": ["markup.deleted"],
+}
+
+
+def load_jsonc(path):
+    """Parse JSON that may contain comments and trailing commas."""
+    text = open(path, encoding="utf-8").read()
+    out = []
+    i, n = 0, len(text)
+    in_str = False
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 1
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+            out.append(c)
+        elif c == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        elif c == "/" and i + 1 < n and text[i + 1] == "*":
+            i = text.find("*/", i + 2)
+            i = n if i < 0 else i + 2
+            continue
+        else:
+            out.append(c)
+        i += 1
+    return json.loads(re.sub(r",(\s*[}\]])", r"\1", "".join(out)))
+
+
+def parse_hex(color):
+    """'#RGB[A]' or '#RRGGBB[AA]' -> (r, g, b, alpha 0..1)."""
+    h = color.lstrip("#")
+    if len(h) in (3, 4):
+        h = "".join(c * 2 for c in h)
+    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    a = int(h[6:8], 16) / 255 if len(h) == 8 else 1.0
+    return r, g, b, a
+
+
+def resolve_rgb(color, background):
+    """Composite a possibly-translucent color over the background."""
+    r, g, b, a = parse_hex(color)
+    br, bg_, bb = background
+    return (round(a * r + (1 - a) * br),
+            round(a * g + (1 - a) * bg_),
+            round(a * b + (1 - a) * bb))
+
+
+def luminance(rgb):
+    """WCAG relative luminance, 0 (black) to 1 (white)."""
+    def chan(c):
+        c /= 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = rgb
+    return 0.2126 * chan(r) + 0.7152 * chan(g) + 0.0722 * chan(b)
+
+
+def contrast(a, b):
+    la, lb = sorted((luminance(a), luminance(b)))
+    return (lb + 0.05) / (la + 0.05)
+
+
+def blend(a, b, t):
+    return tuple(round(a[i] * (1 - t) + b[i] * t) for i in range(3))
+
+
+def nearest256(rgb):
+    """Nearest xterm-256 index (16-255; the first 16 vary by terminal)."""
+    levels = [0, 95, 135, 175, 215, 255]
+    candidates = [(16 + 36 * ri + 6 * gi + bi, (levels[ri], levels[gi], levels[bi]))
+                  for ri in range(6) for gi in range(6) for bi in range(6)]
+    candidates += [(232 + i, (8 + 10 * i,) * 3) for i in range(24)]
+    r, g, b = rgb
+    return min(candidates,
+               key=lambda c: 3 * (r - c[1][0]) ** 2 + 4 * (g - c[1][1]) ** 2
+                             + 2 * (b - c[1][2]) ** 2)[0]
+
+
+def theme_entries(ext_dir):
+    for pkg_path in glob.glob(os.path.join(ext_dir, "*", "package.json")):
+        try:
+            pkg = load_jsonc(pkg_path)
+        except (ValueError, OSError):
+            continue
+        themes = (pkg.get("contributes") or {}).get("themes") or []
+        if not themes:
+            continue
+        nls = {}
+        nls_path = os.path.join(os.path.dirname(pkg_path), "package.nls.json")
+        if os.path.exists(nls_path):
+            try:
+                nls = load_jsonc(nls_path)
+            except (ValueError, OSError):
+                pass
+        for t in themes:
+            label = t.get("label", "")
+            if label.startswith("%") and label.endswith("%"):
+                label = nls.get(label[1:-1], label)
+            yield (t.get("id"), label, t.get("uiTheme"),
+                   os.path.join(os.path.dirname(pkg_path), t.get("path", "")))
+
+
+def find_theme_file(name):
+    """Return (path, uiTheme) for the named theme."""
+    for ext_dir in BUILTIN_EXTENSION_DIRS:
+        if not os.path.isdir(ext_dir):
+            continue
+        for theme_id, label, ui_theme, path in theme_entries(ext_dir):
+            if name in (theme_id, label) and os.path.exists(path):
+                return path, ui_theme
+    sys.exit(f"error: could not find theme file for {name!r}")
+
+
+def load_theme(path, seen=None):
+    """Load a theme JSON, merging its 'include' chain (includer wins)."""
+    seen = seen or set()
+    if path in seen:
+        sys.exit(f"error: circular theme include at {path}")
+    seen.add(path)
+    theme = load_jsonc(path)
+    colors = dict(theme.get("colors") or {})
+    tokens = theme.get("tokenColors")
+    tokens = list(tokens) if isinstance(tokens, list) else []
+    kind = theme.get("type")
+    if theme.get("include"):
+        base_colors, base_tokens, base_kind = load_theme(
+            os.path.join(os.path.dirname(path), theme["include"]), seen)
+        base_colors.update(colors)
+        colors, kind = base_colors, kind or base_kind
+        tokens = base_tokens + tokens
+    return colors, tokens, kind
+
+
+def token_settings(tokens, target):
+    """Settings of the tokenColors rule that best matches a scope, like
+    TextMate: most specific selector wins, later rules break ties."""
+    best, best_len = None, -1
+    for entry in tokens:
+        settings = entry.get("settings") or {}
+        if not settings.get("foreground"):
+            continue
+        scopes = entry.get("scope") or []
+        if isinstance(scopes, str):
+            scopes = scopes.split(",")
+        else:
+            scopes = [part for s in scopes for part in s.split(",")]
+        for scope in (s.strip() for s in scopes):
+            if not scope or " " in scope:  # skip descendant selectors
+                continue
+            if ((target == scope or target.startswith(scope + "."))
+                    and len(scope) >= best_len):
+                best, best_len = settings, len(scope)
+    return best
+
+
+def build_attributes(colors, tokens, kind):
+    defaults = DEFAULTS[kind]
+
+    def hexval(*keys):
+        # Any color the theme itself defines beats any built-in default,
+        # even one earlier in the fallback chain.
+        for table in (colors, defaults):
+            for key in keys:
+                if key in table:
+                    return table[key]
+        return None
+
+    def rgb(over, *keys):
+        return resolve_rgb(hexval(*keys), over)
+
+    editor_bg = rgb((0, 0, 0), "editor.background")
+    editor_fg = rgb(editor_bg, "editor.foreground")
+    if contrast(editor_fg, editor_bg) < 3.0:
+        editor_fg = max(((0, 0, 0), (255, 255, 255)),
+                        key=lambda c: contrast(c, editor_bg))
+
+    def legible(fg, bg):
+        """A theme may pair a color it defines with a default it doesn't;
+        replace the foreground if the combination is unreadable."""
+        for cand in (fg, editor_fg, (0, 0, 0), (255, 255, 255)):
+            if contrast(cand, bg) >= 3.0:
+                return cand
+        return max(((0, 0, 0), (255, 255, 255)), key=lambda c: contrast(c, bg))
+
+    def subtle(fg, bg):
+        """Keep de-emphasized text faint, but never invisible."""
+        for t in (0, 0.25, 0.5, 0.75, 1):
+            cand = blend(fg, editor_fg, t)
+            if contrast(cand, bg) >= 1.5:
+                return cand
+        return editor_fg
+
+    # Composite each color over the surface it actually sits on, and pair
+    # every foreground with its real background.
+    sel_bg = rgb(editor_bg, "editor.selectionBackground")
+    sel_fg = legible(rgb(sel_bg, "editor.selectionForeground",
+                         "editor.foreground"), sel_bg)
+    cursor = legible(rgb(editor_bg, "editorCursor.foreground"), editor_bg)
+    menubar_bg = rgb(editor_bg, "titleBar.activeBackground",
+                     "menu.background", "dropdown.background")
+    menubar_fg = legible(rgb(menubar_bg, "titleBar.activeForeground",
+                             "menu.foreground"), menubar_bg)
+    menusel_bg = rgb(menubar_bg, "menubar.selectionBackground",
+                     "menu.selectionBackground",
+                     "list.activeSelectionBackground")
+    menusel_fg = legible(rgb(menusel_bg, "menubar.selectionForeground",
+                             "menu.selectionForeground",
+                             "titleBar.activeForeground", "menu.foreground"),
+                         menusel_bg)
+    widget_bg = rgb(editor_bg, "editorWidget.background")
+    widget_fg = legible(rgb(widget_bg, "editorWidget.foreground",
+                            "foreground"), widget_bg)
+    list_bg = rgb(widget_bg, "list.activeSelectionBackground")
+    list_fg = legible(rgb(list_bg, "list.activeSelectionForeground",
+                          "editorWidget.foreground", "foreground"), list_bg)
+    button_bg = rgb(editor_bg, "button.background")
+    button_fg = legible(rgb(button_bg, "button.foreground"), button_bg)
+    accent_bg = rgb(editor_bg, "focusBorder")
+    accent_fg = legible(rgb(accent_bg, "button.foreground"), accent_bg)
+    link_fg = legible(rgb(widget_bg, "textLink.foreground", "focusBorder"),
+                      widget_bg)
+    meta_fg = subtle(rgb(editor_bg, "descriptionForeground"), editor_bg)
+    nonprint_fg = subtle(rgb(editor_bg, "editorWhitespace.foreground"),
+                         editor_bg)
+    slider_fg = subtle(rgb(widget_bg, "scrollbarSlider.background"),
+                       widget_bg)
+    shadow_bg = rgb(editor_bg, "widget.shadow")
+    brace_fg = legible(rgb(editor_bg, "editorBracketMatch.border"), editor_bg)
+
+    def fg(c):
+        return f"fg {nearest256(c)}"
+
+    def bg(c):
+        return f"bg {nearest256(c)}"
+
+    highlight = {}
+    for style, targets in HIGHLIGHT_SCOPES.items():
+        settings = None
+        for target in targets:
+            settings = token_settings(tokens, target)
+            if settings:
+                break
+        if settings is None:
+            continue
+        color = resolve_rgb(settings["foreground"], editor_bg)
+        fix = subtle if style == "comment" else legible
+        parts = [fg(fix(color, editor_bg))]
+        font = settings.get("fontStyle") or ""
+        parts += [flag for flag in ("bold", "underline") if flag in font]
+        highlight[style] = parts
+
+    return {
+        "text": [fg(editor_fg), bg(editor_bg)],
+        "text_selected": [fg(sel_fg), bg(sel_bg)],
+        "text_cursor": [fg(cursor), bg(editor_bg), "reverse", "blink"],
+        "text_selection_cursor": [fg(button_fg), bg(button_bg)],
+        "text_selection_cursor2": [fg(accent_fg), bg(accent_bg)],
+        "menubar": [fg(menubar_fg), bg(menubar_bg)],
+        "menubar_selected": [fg(menusel_fg), bg(menusel_bg)],
+        "dialog": [fg(widget_fg), bg(widget_bg)],
+        "dialog_selected": [fg(list_fg), bg(list_bg), "bold"],
+        "button_selected": [fg(button_fg), bg(button_bg), "bold"],
+        "hotkey_highlight": [fg(link_fg), "underline", "bold"],
+        "meta_text": [fg(meta_fg)],
+        "non_print": [fg(nonprint_fg)],
+        "scrollbar": [fg(slider_fg), bg(widget_bg)],
+        "shadow": ["fg default", bg(shadow_bg), "dim"],
+        "brace_highlight": [fg(brace_fg), "bold"],
+    }, highlight
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("config", nargs="?", default=TILDE_CONFIG,
+                    help=f"tilde config to update (default: {TILDE_CONFIG})")
+    ap.add_argument("-n", "--dry-run", action="store_true",
+                    help="print the new attributes without writing")
+    args = ap.parse_args()
+
+    settings = load_jsonc(SETTINGS) if os.path.exists(SETTINGS) else {}
+    theme_name = settings.get("workbench.colorTheme", "Dark Modern")
+    theme_path, ui_theme = find_theme_file(theme_name)
+    colors, tokens, kind = load_theme(theme_path)
+
+    # workbench.colorCustomizations: global keys, then theme-scoped ones.
+    custom = settings.get("workbench.colorCustomizations") or {}
+    colors.update({k: v for k, v in custom.items() if isinstance(v, str)})
+    colors.update(custom.get(f"[{theme_name}]") or {})
+
+    # Many themes omit "type"; fall back to the manifest's uiTheme, then
+    # to the editor background's brightness.
+    kind = kind or {"vs": "light", "hc-light": "light",
+                    "vs-dark": "dark", "hc-black": "dark"}.get(ui_theme)
+    if kind is None and "editor.background" in colors:
+        bg_lum = luminance(parse_hex(colors["editor.background"])[:3])
+        kind = "light" if bg_lum > 0.4 else "dark"
+    kind = "light" if kind in ("light", "hc-light") else "dark"
+
+    attributes, highlight = build_attributes(colors, tokens, kind)
+    print(f"theme: {theme_name} ({kind})")
+    for name, parts in sorted(attributes.items()):
+        print(f"  {name} = ( {', '.join(repr(p) for p in parts)} )")
+    for name, parts in sorted(highlight.items()):
+        print(f"  highlight {name} = ( {', '.join(repr(p) for p in parts)} )")
+    if args.dry_run:
+        return
+
+    config = open(args.config, encoding="utf-8").read()
+    for name, parts in attributes.items():
+        rendered = ", ".join(f'"{p}"' for p in parts)
+        config, count = re.subn(rf"^(\s*){re.escape(name)} = \(.*\)$",
+                                rf"\1{name} = ( {rendered} )",
+                                config, flags=re.M)
+        if count == 0:
+            print(f"warning: attribute {name!r} not found in {args.config}",
+                  file=sys.stderr)
+
+    def highlight_block(match):
+        indent = match.group(1)
+        lines = [f"{indent}highlight_attributes {{",
+                 f"{indent}    normal = (  )"]
+        for name, parts in highlight.items():
+            rendered = ", ".join('"%s"' % p for p in parts)
+            lines.append(f"{indent}    {name} = ( {rendered} )")
+        lines.append(indent + "}")
+        return "\n".join(lines)
+
+    # highlight_attributes blocks are flat (no nested braces), so [^}]*
+    # spans exactly one block.
+    config = re.sub(r"(?m)^([ \t]*)highlight_attributes \{[^}]*\}",
+                    highlight_block, config)
+    with open(args.config, "w", encoding="utf-8") as f:
+        f.write(config)
+    print(f"updated {args.config}")
+
+
+if __name__ == "__main__":
+    main()

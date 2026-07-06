@@ -1,0 +1,93 @@
+highlight_attributes {
+    normal = (  )
+    comment = ( "fg 65" )
+    comment-keyword = ( "fg 174" )
+    keyword = ( "fg 74" )
+    number = ( "fg 151" )
+    string = ( "fg 174" )
+    string-escape = ( "fg 167" )
+    misc = ( "fg 74", "bold" )
+    error = ( "fg 203" )
+    addition = ( "fg 151" )
+    deletion = ( "fg 174" )
+}
+config_version = 1
+%terminals {
+    name = "screen-256color"
+    key_timeout = 100
+    highlight_attributes {
+        normal = (  )
+        comment = ( "fg 65" )
+        comment-keyword = ( "fg 174" )
+        keyword = ( "fg 74" )
+        number = ( "fg 151" )
+        string = ( "fg 174" )
+        string-escape = ( "fg 167" )
+        misc = ( "fg 74", "bold" )
+        error = ( "fg 203" )
+        addition = ( "fg 151" )
+        deletion = ( "fg 174" )
+    }
+    color = true
+    attributes {
+        brace_highlight = ( "fg 102", "bold" )
+        button_selected = ( "fg 231", "bg 25", "bold" )
+        dialog = ( "fg 252", "bg 235" )
+        dialog_selected = ( "fg 231", "bg 23", "bold" )
+        hotkey_highlight = ( "fg 69", "underline", "bold" )
+        menubar = ( "fg 252", "bg 235" )
+        menubar_selected = ( "fg 188", "bg 32" )
+        meta_text = ( "fg 246" )
+        non_print = ( "fg 237" )
+        scrollbar = ( "fg 238", "bg 235" )
+        shadow = ( "fg default", "bg 233", "dim" )
+        text = ( "fg 188", "bg 234" )
+        text_cursor = ( "fg 145", "bg 234", "reverse", "blink" )
+        text_selected = ( "fg 188", "bg 24" )
+        text_selection_cursor2 = ( "fg 231", "bg 32" )
+        text_selection_cursor = ( "fg 231", "bg 25" )
+    }
+}
+%terminals {
+    name = "xterm-256color"
+    key_timeout = 100
+    highlight_attributes {
+        normal = (  )
+        comment = ( "fg 65" )
+        comment-keyword = ( "fg 174" )
+        keyword = ( "fg 74" )
+        number = ( "fg 151" )
+        string = ( "fg 174" )
+        string-escape = ( "fg 167" )
+        misc = ( "fg 74", "bold" )
+        error = ( "fg 203" )
+        addition = ( "fg 151" )
+        deletion = ( "fg 174" )
+    }
+    attributes {
+        brace_highlight = ( "fg 102", "bold" )
+        button_selected = ( "fg 231", "bg 25", "bold" )
+        dialog = ( "fg 252", "bg 235" )
+        dialog_selected = ( "fg 231", "bg 23", "bold" )
+        hotkey_highlight = ( "fg 69", "underline", "bold" )
+        menubar = ( "fg 252", "bg 235" )
+        menubar_selected = ( "fg 188", "bg 32" )
+        meta_text = ( "fg 246" )
+        non_print = ( "fg 237" )
+        scrollbar = ( "fg 238", "bg 235" )
+        shadow = ( "fg default", "bg 233", "dim" )
+        text = ( "fg 188", "bg 234" )
+        text_cursor = ( "fg 145", "bg 234", "reverse", "blink" )
+        text_selected = ( "fg 188", "bg 24" )
+        text_selection_cursor2 = ( "fg 231", "bg 32" )
+        text_selection_cursor = ( "fg 231", "bg 25" )
+    }
+}
+color = true
+wrap = false
+tab_spaces = true
+auto_indent = true
+indent_aware_home = true
+show_tabs = false
+strip_spaces = false
+tabsize = 4
