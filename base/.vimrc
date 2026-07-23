@@ -13,6 +13,7 @@ unlet s:cpo_save
 set background=dark
 set backspace=indent,eol,start
 set display=truncate
+set expandtab
 set fileencodings=ucs-bom,utf-8,default,latin1
 set helplang=en
 set history=200
@@ -23,17 +24,21 @@ set isfname=@,48-57,/,.,-,_,+,,,#,$,%,~,=,:
 set langnoremap
 set nolangremap
 set nomodeline
+set mouse=a
 set nrformats=bin,hex
 set printoptions=paper:letter
 set ruler
 set scrolloff=5
+set shiftwidth=4
 set showcmd
 set suffixes=.bak,~,.swp,.o,.info,.aux,.log,.dvi,.bbl,.blg,.brf,.cb,.ind,.idx,.ilg,.inx,.out,.toc
+set tabstop=4
+set termencoding=utf-8
 set ttimeout
 set ttimeoutlen=100
 set wildmenu
 colorscheme koehler
 if has("gui_running")
-    set guifont=Ubuntu_Mono:h16:cANSI:qDRAFT
+    set guifont=Fira\ Code\ 14
 endif
 " vim: set ft=vim :
