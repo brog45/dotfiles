@@ -1,5 +1,5 @@
 (() => {
-    const TITLE = "SEFI Laptop";
+    const TITLE = "GLKVM";
 
     const host = location.hostname;
     const allow =

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "SEFI Laptop Title Override",
+  "name": "GLKVM Title Override",
   "version": "1.0",
-  "description": "Locks the page title to \"SEFI Laptop\" on the SEFI KVM web UI.",
+  "description": "Locks the page title to \"GLKVM\" on the GLKVM web UI.",
   "content_scripts": [
     {
       "matches": [
