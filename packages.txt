@@ -35,6 +35,7 @@ rustup
 shellcheck
 stow
 syncthing
+tailscale
 texlive-fonts-extra
 texlive-latex-base
 texlive-latex-recommended
