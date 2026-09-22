@@ -1,0 +1,11 @@
+app.zen_browser.zen
+com.github.PintaProject.Pinta
+com.github.maoschanz.drawing
+com.github.tchx84.Flatseal
+com.github.unrud.VideoDownloader
+io.github.halfmexican.Mingle
+it.mijorus.smile
+org.chromium.Chromium
+org.gnome.DejaDup
+org.remmina.Remmina
+org.signal.Signal
