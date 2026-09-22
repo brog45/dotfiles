@@ -21,7 +21,6 @@ keepassxc
 language-pack-en
 logrotate
 mupdf
-netcat-netbsd
 netcat-openbsd
 nodejs
 npm
@@ -31,8 +30,6 @@ python3-dev
 python3-netifaces
 python3-pip
 python3-venv
-qprint
-remmina
 rsyslog
 rustup
 shellcheck
@@ -42,7 +39,6 @@ texlive-fonts-extra
 texlive-latex-base
 texlive-latex-recommended
 tilde
-vim
 vim-gtk3
 vim-tiny
 xxd
