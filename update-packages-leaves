@@ -1,0 +1,139 @@
+#!/usr/bin/bash
+
+# Regenerate packages-leaves.txt: the apt packages you chose to install, with
+# anything that arrived as a dependency filtered out.
+#
+# A package is listed when BOTH are true:
+#   1. apt-mark reports it as manually installed, and
+#   2. nothing else installed requires it -- or it is the representative of a
+#      dependency cycle that nothing outside the cycle requires (see below).
+#
+# "Requires" covers Pre-Depends, Depends and Recommends. Recommends counts
+# because apt installs recommended packages by default, so a recommended
+# package would reappear on a fresh machine without being listed.
+# install-packages-leaves therefore uses a plain `apt install`, which honours
+# Recommends. Change one and you must change the other, or the list stops
+# round-tripping.
+#
+# Alternatives and virtual packages: a group like `vim | vim-gtk3 | vim-tiny`
+# only marks a package as required when exactly one installed package can
+# satisfy it. If two alternatives are installed, neither is strictly required,
+# so both stay on the list. Same rule for Provides.
+#
+# Dependency cycles: Debian packages are routinely mutually dependent
+# (calibre <-> calibre-bin, gedit <-> gedit-common, language-pack-en <->
+# language-pack-en-base). Every member of such a cycle is required by another
+# member, so a plain "nothing requires it" test finds no leaf and drops the
+# entire cycle from the list. This script instead checks what the kept set
+# actually pulls in, and for any group left uncovered promotes one member --
+# preferring a manually installed one -- so the cycle is reachable again.
+
+set -euo pipefail
+
+# Byte-order collation so sort/comm/python agree on ordering, and so apt's
+# output stays untranslated for parsing.
+export LC_ALL=C
+
+cd "$(dirname "$(readlink -f "$0")")"
+
+output=packages-leaves.txt
+
+manual=$(mktemp)
+pkgdata=$(mktemp)
+trap 'rm -f "$manual" "$pkgdata"' EXIT
+
+apt-mark showmanual | sort -u > "$manual"
+
+# ${Package}, NOT ${binary:Package}: on a multiarch system the latter appends
+# an arch qualifier ("gcc-14-base:amd64") while dependency fields use the bare
+# name, so every multiarch package would look unreferenced and the list would
+# balloon by ~1200 entries.
+dpkg-query -Wf '${db:Status-Status}\t${Package}\t${Provides}\t${Pre-Depends}, ${Depends}, ${Recommends}\n' > "$pkgdata"
+
+python3 - "$pkgdata" "$manual" <<'PYTHON' > "$output"
+import re
+import sys
+from collections import deque
+
+pkgdata_path, manual_path = sys.argv[1], sys.argv[2]
+
+STRIP = re.compile(r"\([^)]*\)|\[[^\]]*\]|<[^>]*>")
+ARCH = re.compile(r":[A-Za-z0-9]+$")
+
+
+def clean(name):
+    """Reduce one dependency atom to a bare package name."""
+    name = STRIP.sub("", name)          # version constraints, arch restrictions, profiles
+    name = name.strip()
+    return ARCH.sub("", name)           # multiarch qualifier: foo:any, foo:amd64
+
+
+installed = set()
+provides = {}       # virtual or real name -> packages providing it
+dep_groups = {}     # package -> list of groups, each group a list of atoms
+
+with open(pkgdata_path) as fh:
+    for line in fh:
+        status, name, prov, deps = line.rstrip("\n").split("\t")
+        if status != "installed":       # skip config-files/half-installed states
+            continue
+        installed.add(name)
+        dep_groups[name] = [
+            [clean(atom) for atom in group.split("|")] for group in deps.split(",")
+        ]
+        for atom in prov.split(","):
+            virtual = clean(atom)
+            if virtual:
+                provides.setdefault(virtual, set()).add(name)
+
+# pulls[pkg] = packages pkg is guaranteed to bring in. A dependency group only
+# counts when exactly one installed package can satisfy it; if several
+# alternatives are installed, none of them is individually required.
+pulls = {pkg: set() for pkg in installed}
+for pkg, groups in dep_groups.items():
+    for group in groups:
+        candidates = set()
+        for atom in group:
+            if not atom:
+                continue
+            if atom in installed:
+                candidates.add(atom)
+            candidates |= provides.get(atom, set()) & installed
+        candidates.discard(pkg)
+        if len(candidates) == 1:
+            pulls[pkg] |= candidates
+
+required = set().union(*pulls.values()) if pulls else set()
+keep = installed - required
+
+
+def reachable_from(seeds):
+    """Everything the given packages drag in, transitively."""
+    seen = set(seeds)
+    queue = deque(seeds)
+    while queue:
+        for nxt in pulls.get(queue.popleft(), ()):
+            if nxt not in seen:
+                seen.add(nxt)
+                queue.append(nxt)
+    return seen
+
+
+with open(manual_path) as fh:
+    manual = {line.strip() for line in fh if line.strip()}
+
+# Promote a representative for every group the kept set cannot reach. These are
+# dependency cycles: each member is required by another member, so none of them
+# qualified as a leaf. Manually installed members are preferred, so the
+# representative survives the intersection with the manual set below.
+covered = reachable_from(keep)
+for pkg in sorted(installed - covered, key=lambda p: (p not in manual, p)):
+    if pkg not in covered:
+        keep.add(pkg)
+        covered |= reachable_from({pkg})
+
+for pkg in sorted(keep & manual):
+    print(pkg)
+PYTHON
+
+printf '%s: %d packages\n' "$output" "$(wc -l < "$output")"

@@ -1,0 +1,140 @@
+#!/usr/bin/bash
+
+# Install every package listed in packages-leaves.txt that is not already
+# installed on this machine. Installs only; never removes anything.
+#
+# Usage: install-packages-leaves [-y] [-h] [list-file]
+#   -y          skip the confirmation prompt (passes -y to apt-get too)
+#   -h          show this help
+#   list-file   read from this file instead of packages-leaves.txt
+#
+# Runs on a bare machine: needs only bash, dpkg, apt, coreutils, sed and awk,
+# all of which any apt-based system already has. No Python, unlike its
+# companion update-packages-leaves. Root is obtained via sudo, or used
+# directly when already root, so it also works where sudo is not installed.
+#
+# Uses `apt-get install`, not `apt install`: apt's CLI is explicitly not
+# stable for scripting. Both honour Recommends by default, which is what
+# matters here -- update-packages-leaves treats a recommended package as
+# already covered and leaves it off the list, so passing
+# --no-install-recommends would leave those packages uninstalled.
+#
+# Packages apt cannot find (typically from a third-party repo that is not
+# configured yet, e.g. docker-ce, code, warp-terminal, tailscale) are skipped
+# and reported at the end. Exit status is 1 if any were skipped, so the script
+# is safe to run repeatedly: add the missing repos, run it again.
+
+set -euo pipefail
+
+# Byte-order collation so sort and comm agree on ordering, and so apt's
+# output stays untranslated for parsing.
+export LC_ALL=C
+
+cd "$(dirname "$(readlink -f "$0")")"
+
+assume_yes=0
+aborted=0
+
+# Print the comment block above, so the help text cannot drift out of sync
+# with it the way a hardcoded line range would.
+usage() {
+    awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "$0"
+}
+
+while getopts ':yh' opt; do
+    case "$opt" in
+        y) assume_yes=1 ;;
+        h) usage; exit 0 ;;
+        *) printf 'unknown option: -%s\n\n' "$OPTARG" >&2; usage >&2; exit 2 ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+list_file=${1:-packages-leaves.txt}
+
+if [[ ! -f $list_file ]]; then
+    printf 'no such list file: %s\n' "$list_file" >&2
+    printf 'run ./update-packages-leaves to generate it.\n' >&2
+    exit 2
+fi
+
+# Escalate only if we have to, so this works on systems without sudo.
+if [[ $(id -u) -eq 0 ]]; then
+    as_root=()
+elif command -v sudo >/dev/null 2>&1; then
+    as_root=(sudo)
+else
+    printf 'not root and sudo is not installed.\n' >&2
+    printf 're-run this script as root.\n' >&2
+    exit 2
+fi
+
+installed=$(mktemp)
+wanted=$(mktemp)
+trap 'rm -f "$installed" "$wanted"' EXIT
+
+# Same ${Package} / "installed" status filter as update-packages-leaves, so
+# the two scripts agree on what "already installed" means.
+dpkg-query -Wf '${db:Status-Status}\t${Package}\n' \
+    | awk -F'\t' '$1 == "installed" { print $2 }' | sort -u > "$installed"
+
+# Ignore blank lines and # comments so the list stays hand-editable.
+sed -e 's/#.*//' -e 's/[[:space:]]//g' "$list_file" | sed '/^$/d' | sort -u > "$wanted"
+
+mapfile -t missing < <(comm -23 "$wanted" "$installed")
+
+if [[ ${#missing[@]} -eq 0 ]]; then
+    printf 'nothing to do: all %d packages in %s are installed.\n' \
+        "$(wc -l < "$wanted")" "$list_file"
+    exit 0
+fi
+
+# On a freshly installed machine the package lists are often absent. Without
+# them every single package resolves as unavailable, which looks like a
+# catastrophic failure rather than a missing `apt-get update`.
+if ! compgen -G '/var/lib/apt/lists/*Packages*' > /dev/null; then
+    printf 'apt has no package lists; every package would look unavailable.\n' >&2
+    printf 'run: %sapt-get update\n' "${as_root[*]:+sudo }" >&2
+    exit 2
+fi
+
+# Split the missing packages by whether apt can actually resolve them.
+available=()
+unavailable=()
+for pkg in "${missing[@]}"; do
+    candidate=$(apt-cache policy -- "$pkg" 2>/dev/null | awk '/^  Candidate:/ { print $2 }')
+    if [[ -n $candidate && $candidate != '(none)' ]]; then
+        available+=("$pkg")
+    else
+        unavailable+=("$pkg")
+    fi
+done
+
+if [[ ${#available[@]} -gt 0 ]]; then
+    printf '%d package(s) to install:\n' "${#available[@]}"
+    printf '  %s\n' "${available[@]}"
+    printf '\n'
+
+    if [[ $assume_yes -eq 1 ]]; then
+        ${as_root[@]+"${as_root[@]}"} apt-get install -y -- "${available[@]}"
+    else
+        read -r -p "install these? [y/N] " reply
+        case "$reply" in
+            [yY]|[yY][eE][sS]) ${as_root[@]+"${as_root[@]}"} apt-get install -- "${available[@]}" ;;
+            # Fall through rather than exit, so the report below still runs.
+            *) printf 'aborted.\n'; aborted=1 ;;
+        esac
+    fi
+fi
+
+if [[ ${#unavailable[@]} -gt 0 ]]; then
+    printf '\n%d package(s) not found by apt:\n' "${#unavailable[@]}"
+    printf '  %s\n' "${unavailable[@]}"
+    printf 'their repositories are probably not configured yet.\n'
+    printf 'run apt-get update first; otherwise add the repos and re-run.\n'
+    exit 1
+fi
+
+[[ $aborted -eq 1 ]] && exit 1
+
+exit 0
