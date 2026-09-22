@@ -44,3 +44,4 @@ vim-gtk3
 vim-tiny
 xxd
 tree
+ripgrep
