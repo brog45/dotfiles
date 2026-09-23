@@ -52,16 +52,8 @@ ibus-table-wubi
 init
 isc-dhcp-common
 keepassxc
-language-pack-en
 latencytop
-libbpf0
-libdns-export1110
-libicu70
-libmpdec3
-libnetplan0
 libnss3-tools
-libprocps8
-libpython3.10-minimal
 libreoffice-gnome
 libreoffice-help-de
 libreoffice-help-en-gb
@@ -77,7 +69,6 @@ libreoffice-help-zh-cn
 libreoffice-help-zh-tw
 libreoffice-l10n-ar
 libreoffice-l10n-en-za
-libunistring2
 mupdf
 mythes-ar
 mythes-de
@@ -102,7 +93,6 @@ plocate
 pop-desktop
 python3-pip
 python3-venv
-python3.10
 qprint
 remmina
 ripgrep
@@ -110,7 +100,6 @@ rsyslog
 rustup
 sessioninstaller
 shellcheck
-software-properties-common
 stow
 syncthing
 system76-acpi-dkms

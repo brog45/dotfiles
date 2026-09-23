@@ -1,0 +1,412 @@
+#!/usr/bin/bash
+
+# End-to-end tests for update-packages-leaves and install-packages-leaves,
+# each scenario in a throwaway container: a genuinely fresh machine with no
+# sudo, mawk rather than gawk, and empty apt package lists. Most run on
+# ubuntu:24.04 (Pop!_OS's base); the extrepo scenarios run on debian:13,
+# which is what extrepo's repository metadata targets.
+#
+# Usage: tests/packages-leaves-docker-test [--full]
+#   --full   also install the real packages-leaves.txt into a fresh container
+#            (downloads several GB; takes a long time)
+
+set -uo pipefail
+
+repo=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+image=ubuntu:24.04
+debian=debian:13
+full=0
+[[ ${1:-} == --full ]] && full=1
+
+volume=packages-leaves-test-$$
+docker volume create "$volume" >/dev/null
+trap 'docker volume rm -f "$volume" >/dev/null' EXIT
+
+passed=0
+failed=0
+failures=()
+
+# Run one scenario: stdin is a bash script executed as root in a fresh
+# container (ubuntu unless a second argument names another image), with the
+# scripts copied into a writable /work.
+scenario() {
+    local name=$1 img=${2:-$image}
+    printf '\n=== %s [%s] ===\n' "$name" "$img"
+    # shellcheck disable=SC2016  # $fail is expanded in the container, not here
+    if { cat <<'PRELUDE'; cat; printf '\nexit $fail\n'; } \
+        | docker run --rm -i -e DEBIAN_FRONTEND=noninteractive \
+            -v "$repo:/src:ro" -v "$volume:/vol" "$img" \
+            bash -c 'cat > /tmp/scenario; exec bash /tmp/scenario < /dev/null'; then
+set -u
+fail=0
+check() {
+    if eval "$2"; then printf '  PASS  %s\n' "$1"
+    else printf '  FAIL  %s\n' "$1"; fail=1; fi
+}
+mkdir -p /work
+cp /src/install-packages-leaves /src/update-packages-leaves /work/
+cd /work
+PRELUDE
+        passed=$((passed + 1))
+    else
+        failed=$((failed + 1))
+        failures+=("$name")
+    fi
+}
+
+docker pull -q "$image" >/dev/null
+docker pull -q "$debian" >/dev/null
+
+scenario 'fresh machine: environment is what we think it is' <<'EOF'
+check 'running as root'                 '[[ $(id -u) -eq 0 ]]'
+check 'sudo is not installed'           '! command -v sudo >/dev/null'
+check 'awk is mawk, not gawk'           '[[ $(readlink -f "$(command -v awk)") == */mawk ]]'
+check 'python3 is not installed'        '! command -v python3 >/dev/null'
+check 'apt package lists are empty'     '! compgen -G "/var/lib/apt/lists/*Packages*" >/dev/null'
+EOF
+
+scenario 'no package lists: clear error, no sudo in the hint' <<'EOF'
+printf 'htop\n' > /tmp/list
+out=$(./install-packages-leaves /tmp/list 2>&1); rc=$?
+echo "$out" | sed 's/^/    | /'
+check 'exit status 2'                   '[[ $rc -eq 2 ]]'
+check 'explains missing package lists'  'grep -q "no package lists" <<<"$out"'
+check 'hint omits sudo when root'       'grep -qx "run: apt-get update" <<<"$out"'
+# Without package lists every installed package looks as though no repository
+# provides it, so the generator must refuse rather than emit an empty list
+# over the real one.
+printf 'keep-me\n' > packages-leaves.txt
+out=$(./update-packages-leaves 2>&1); rc=$?
+echo "$out" | sed 's/^/    | /'
+check 'generator exits 2'               '[[ $rc -eq 2 ]]'
+check 'generator explains why'          'grep -q "no package lists" <<<"$out"'
+check 'generator left the list alone'   'grep -qx keep-me packages-leaves.txt'
+EOF
+
+scenario 'nothing to do works without apt lists or python' <<'EOF'
+printf 'bash\ncoreutils\n# comment\n\n  \n' > /tmp/list
+out=$(./install-packages-leaves /tmp/list 2>&1); rc=$?
+echo "$out" | sed 's/^/    | /'
+check 'exit status 0'                   '[[ $rc -eq 0 ]]'
+check 'reports 2 packages, ignores comments/blanks' 'grep -q "all 2 packages" <<<"$out"'
+EOF
+
+scenario 'help and option handling under mawk' <<'EOF'
+out=$(./install-packages-leaves -h 2>&1); rc=$?
+check '-h exits 0'                      '[[ $rc -eq 0 ]]'
+check '-h prints the comment block'     'head -1 <<<"$out" | grep -q "^Install every package"'
+check '-h stops at end of comment block' '! grep -q "set -euo" <<<"$out"'
+out=$(./install-packages-leaves -Q 2>&1); rc=$?
+check 'bad option exits 2'              '[[ $rc -eq 2 ]]'
+out=$(./install-packages-leaves /nope 2>&1); rc=$?
+check 'missing list file exits 2'       '[[ $rc -eq 2 ]] && grep -q "no such list file" <<<"$out"'
+EOF
+
+scenario 'install -y as root without sudo, skip and report unavailable' <<'EOF'
+apt-get update -qq
+printf 'htop\ntree  # trailing comment\n\nnot-a-real-package-xyz\n' > /tmp/list
+out=$(./install-packages-leaves -y /tmp/list 2>&1); rc=$?
+echo "$out" | grep -v '^\(Get\|Selecting\|Preparing\|Unpacking\|Setting up\|Processing\|Reading\|Building\|Fetched\|(Reading\)' | sed 's/^/    | /'
+check 'exit 0: unavailable is only a warning' '[[ $rc -eq 0 ]]'
+check 'htop installed'                  'dpkg -s htop >/dev/null 2>&1'
+check 'tree installed (inline comment stripped)' 'dpkg -s tree >/dev/null 2>&1'
+check 'unavailable package reported as a warning' 'grep -A1 "^warning: 1 package(s) not found" <<<"$out" | grep -q "not-a-real-package-xyz"'
+out=$(./install-packages-leaves -y /tmp/list 2>&1); rc=$?
+check 're-run: still exit 0'            '[[ $rc -eq 0 ]]'
+check 're-run: nothing left to install' '! grep -q "to install" <<<"$out"'
+EOF
+
+scenario 'interactive prompt: n/EOF abort but still report, y installs once' <<'EOF'
+apt-get update -qq
+printf 'cowsay\nnot-a-real-package-xyz\n' > /tmp/list
+out=$(printf 'n\n' | ./install-packages-leaves /tmp/list 2>&1); rc=$?
+check '"n": exit 1'                     '[[ $rc -eq 1 ]]'
+check '"n": cowsay not installed'       '! dpkg -s cowsay >/dev/null 2>&1'
+check '"n": unavailable still reported' 'grep -q "not-a-real-package-xyz" <<<"$out"'
+out=$(printf '\n' | ./install-packages-leaves /tmp/list 2>&1); rc=$?
+check 'empty answer defaults to no'     '! dpkg -s cowsay >/dev/null 2>&1'
+out=$(./install-packages-leaves /tmp/list 2>&1 </dev/null); rc=$?
+check 'EOF on stdin: exit 1, not a silent death' '[[ $rc -eq 1 ]] && grep -q aborted <<<"$out"'
+check 'EOF on stdin: unavailable still reported' 'grep -q "not-a-real-package-xyz" <<<"$out"'
+check 'prompt shows total with dependencies' 'grep -q "including dependencies" <<<"$out"'
+printf 'cowsay\n' > /tmp/list
+out=$(printf 'y\n' | ./install-packages-leaves /tmp/list 2>&1); rc=$?
+check '"y": exit 0'                     '[[ $rc -eq 0 ]]'
+check '"y": cowsay installed'           'dpkg -s cowsay >/dev/null 2>&1'
+check '"y": apt did not ask a second time' '! grep -q "Do you want to continue" <<<"$out"'
+EOF
+
+scenario 'resolver conflict: caught by simulation, nothing touched' <<'EOF'
+apt-get update -qq
+# postfix and exim4-daemon-light are both mail transport agents and conflict.
+# Each is installable alone, so this must be reported as a conflict (an
+# error), not set aside as an unsatisfiable package (a warning).
+printf 'postfix\nexim4-daemon-light\nnot-a-real-package-xyz\n' > /tmp/list
+out=$(./install-packages-leaves -y /tmp/list 2>&1); rc=$?
+echo "$out" | sed 's/^/    | /'
+check 'exit status 1 (a conflict is an error)' '[[ $rc -eq 1 ]]'
+check 'explains the conflict'           'grep -q "cannot install these packages together" <<<"$out"'
+check 'postfix not installed'           '! dpkg -s postfix >/dev/null 2>&1'
+check 'exim4-daemon-light not installed' '! dpkg -s exim4-daemon-light >/dev/null 2>&1'
+check 'unavailable still reported'      'grep -q "not-a-real-package-xyz" <<<"$out"'
+EOF
+
+scenario 'non-root user with passwordless sudo' <<'EOF'
+apt-get update -qq
+apt-get install -y -qq sudo >/dev/null 2>&1
+useradd -m tester
+echo 'tester ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/tester
+chmod -R a+rX /work
+printf 'htop\n' > /tmp/list; chmod a+r /tmp/list
+out=$(su tester -c '/work/install-packages-leaves -y /tmp/list' 2>&1); rc=$?
+check 'exit status 0'                   '[[ $rc -eq 0 ]]'
+check 'htop installed via sudo'         'dpkg -s htop >/dev/null 2>&1'
+EOF
+
+scenario 'non-root user without sudo: clear error' <<'EOF'
+apt-get update -qq
+useradd -m tester
+chmod -R a+rX /work
+printf 'htop\n' > /tmp/list; chmod a+r /tmp/list
+out=$(su tester -c '/work/install-packages-leaves -y /tmp/list' 2>&1); rc=$?
+echo "$out" | sed 's/^/    | /'
+check 'exit status 2'                   '[[ $rc -eq 2 ]]'
+check 'says sudo is missing'            'grep -q "sudo is not installed" <<<"$out"'
+check 'htop not installed'              '! dpkg -s htop >/dev/null 2>&1'
+EOF
+
+scenario 'generator: packages with no repo source are left out and warned' <<'EOF'
+apt-get update -qq
+apt-get install -y -qq python3 tree cowsay >/dev/null 2>&1
+printf 'cowsay   # trailing comment\n' > packages-leaves-exclude.txt
+# Pop!_OS pins its whole origin at 1001, which widens the priority column on
+# apt-cache policy's source lines. Pin the Ubuntu origin the same way (a
+# per-package pin would only change the version line): every package must
+# still count as having a repo source.
+printf 'Package: *\nPin: release o=Ubuntu\nPin-Priority: 1001\n' > /etc/apt/preferences.d/pop-like
+check 'source lines now show priority 1001' 'apt-cache policy tree | grep -q "^ *1001 http"'
+# A hand-built .deb stands in for a hand-installed package / release leftover.
+mkdir -p /tmp/dummy/DEBIAN
+cat > /tmp/dummy/DEBIAN/control <<'CONTROL'
+Package: local-only-dummy
+Version: 1.0
+Architecture: all
+Maintainer: Test <test@example.invalid>
+Depends: tree
+Description: stands in for a package no repository provides
+CONTROL
+dpkg-deb --build /tmp/dummy /tmp/dummy.deb >/dev/null
+dpkg -i /tmp/dummy.deb >/dev/null
+check 'dummy is marked manual'          'apt-mark showmanual | grep -qx local-only-dummy'
+out=$(./update-packages-leaves 2>&1); rc=$?
+echo "$out" | sed 's/^/    | /'
+check 'generator exit 0'                '[[ $rc -eq 0 ]]'
+check 'dummy left out of the list'      '! grep -qx local-only-dummy packages-leaves.txt'
+check 'dummy named in the warning'      'grep -qx "  local-only-dummy" <<<"$out"'
+check 'only the dummy is called obsolete under the pin' '[[ $(grep -c "^  " <<<"$out") -eq 1 ]]'
+check 'tree listed even though only the dummy required it' 'grep -qx tree packages-leaves.txt'
+check 'excluded cowsay not listed'      '! grep -qx cowsay packages-leaves.txt'
+check 'exclusion is reported'           'grep -q "^excluded per packages-leaves-exclude.txt: cowsay$" <<<"$out"'
+EOF
+
+# Round trip. Machine A: install a set chosen to hit every tricky case, then
+# generate the list. Machine B: fresh, install only from that list. The two
+# machines must end up with identical package sets and identical lists.
+#   language-pack-en     cycle with language-pack-en-base (the cycle fix)
+#   vim-tiny + vim-nox   both satisfy vim-common's `vim | ... | vim-tiny`
+#                        (the sole-candidate rule keeps both)
+#   build-essential      manual, but python3-pip recommends it (must be dropped
+#                        from the list yet still arrive on B via Recommends)
+#   gawk                 second provider of the awk virtual package
+scenario 'round trip, machine A: build and generate' <<'EOF'
+apt-get update -qq
+apt-get install -y -qq python3 language-pack-en vim-tiny vim-nox python3-pip \
+    build-essential gawk htop tree >/dev/null 2>&1
+check 'setup packages installed'        'dpkg -s language-pack-en vim-nox python3-pip >/dev/null 2>&1'
+out=$(./update-packages-leaves 2>&1); rc=$?
+echo "    | $out"
+check 'generator exit 0'                '[[ $rc -eq 0 ]]'
+check 'output is C-sorted'              'LC_ALL=C sort -c packages-leaves.txt'
+check 'cycle: language-pack-en listed'  'grep -qx language-pack-en packages-leaves.txt'
+check 'cycle: -base not listed'         '! grep -qx language-pack-en-base packages-leaves.txt'
+check 'alternatives: vim-tiny listed'   'grep -qx vim-tiny packages-leaves.txt'
+check 'alternatives: vim-nox listed'    'grep -qx vim-nox packages-leaves.txt'
+check 'recommends: build-essential dropped' '! grep -qx build-essential packages-leaves.txt'
+check 'python3-pip listed'              'grep -qx python3-pip packages-leaves.txt'
+check 'gawk listed'                     'grep -qx gawk packages-leaves.txt'
+check 'no arch-qualified names'         '! grep -q : packages-leaves.txt'
+check 'no obsolete-package warning on a clean machine' '! grep -q warning <<<"$out"'
+cp packages-leaves.txt /vol/L_A
+dpkg-query -Wf '${db:Status-Status}\t${Package}\n' \
+    | awk -F'\t' '$1=="installed"{print $2}' | LC_ALL=C sort -u > /vol/I_A
+echo "    list: $(wc -l < /vol/L_A) packages; machine: $(wc -l < /vol/I_A) installed"
+EOF
+
+scenario 'round trip, machine B: install from list, compare' <<'EOF'
+apt-get update -qq
+cp /vol/L_A /tmp/list
+echo not-in-any-repo-xyz >> /tmp/list
+out=$(./install-packages-leaves -y /tmp/list 2>&1); rc=$?
+check 'installer exit 0 (the planted package is only a warning)' '[[ $rc -eq 0 ]]'
+check 'planted package reported'        'grep -q not-in-any-repo-xyz <<<"$out"'
+dpkg-query -Wf '${db:Status-Status}\t${Package}\n' \
+    | awk -F'\t' '$1=="installed"{print $2}' | LC_ALL=C sort -u > /tmp/I_B
+if ! diff -q /vol/I_A /tmp/I_B >/dev/null; then
+    echo "    installed-set diff (< A only, > B only):"
+    diff /vol/I_A /tmp/I_B | grep '^[<>]' | sed 's/^/      /'
+fi
+check 'B has exactly the packages A had' 'diff -q /vol/I_A /tmp/I_B >/dev/null'
+check 'build-essential arrived via Recommends' 'dpkg -s build-essential >/dev/null 2>&1'
+out=$(./update-packages-leaves 2>&1); rc=$?
+check 'generator runs on B'             '[[ $rc -eq 0 ]]'
+if ! diff -q /vol/L_A packages-leaves.txt >/dev/null; then
+    echo "    list diff (< A, > B):"
+    diff /vol/L_A packages-leaves.txt | grep '^[<>]' | sed 's/^/      /'
+fi
+check 'regenerated list identical to A' 'diff -q /vol/L_A packages-leaves.txt >/dev/null'
+EOF
+
+# ---- vendor repositories via extrepo (debian:13) ---------------------------
+
+scenario 'extrepo: enables only needed repos, widens license policy' "$debian" <<'EOF'
+apt-get update -qq
+# htop comes from Debian itself, so its (bogus) repository must never be
+# touched; warp-terminal has no repository line at all.
+printf 'code\ntailscale\nhtop\nwarp-terminal\n' > /tmp/list
+cat > /tmp/repos <<'REPOS'
+vscode              code        # needs the non-free license policy
+tailscale           tailscale
+never-needed-repo   htop
+REPOS
+check 'extrepo not installed yet'       '! command -v extrepo >/dev/null'
+out=$(./install-packages-leaves -y -r /tmp/repos /tmp/list 2>&1); rc=$?
+echo "$out" | grep -v -E '^(Get|Selecting|Preparing|Unpacking|Setting up|Processing|Reading|Building|Fetched|\(Reading|debconf|  [a-z0-9].*[a-z0-9]$)' | sed 's/^/    | /'
+check 'exit 0 (warp-terminal is only a warning)' '[[ $rc -eq 0 ]]'
+check 'extrepo was installed'           'command -v extrepo >/dev/null'
+check 'non-free policy was added'       'grep -qx -- "- non-free" /etc/extrepo/config.yaml'
+check 'vscode repo enabled'             '[[ -f /etc/apt/sources.list.d/extrepo_vscode.sources ]]'
+check 'tailscale repo enabled'          '[[ -f /etc/apt/sources.list.d/extrepo_tailscale.sources ]]'
+check 'unneeded repo never attempted'   '! grep -q never-needed-repo <<<"$out"'
+check 'code installed'                  'dpkg -s code >/dev/null 2>&1'
+check 'tailscale installed'             'dpkg -s tailscale >/dev/null 2>&1'
+check 'htop installed'                  'dpkg -s htop >/dev/null 2>&1'
+check 'warp-terminal warned as not found' 'grep -A1 "^warning: 1 package(s) not found" <<<"$out" | grep -q warp-terminal'
+out=$(./install-packages-leaves -y -r /tmp/repos /tmp/list 2>&1); rc=$?
+check 're-run: exit 0'                  '[[ $rc -eq 0 ]]'
+check 're-run: no repo work, nothing to install' '! grep -q -e "repo(s) to enable" -e "to install" <<<"$out"'
+EOF
+
+scenario 'extrepo: repo already configured another way is not duplicated' "$debian" <<'EOF'
+apt-get update -qq
+apt-get install -y -qq extrepo >/dev/null 2>&1
+# Stand-in for a hand-configured vendor repo (like this machine's docker.list
+# and vscode.sources): the same source, under a name extrepo does not own.
+extrepo enable tailscale >/dev/null 2>&1
+mv /etc/apt/sources.list.d/extrepo_tailscale.sources /etc/apt/sources.list.d/tailscale-by-hand.sources
+apt-get update -qq
+printf 'tailscale\n' > /tmp/list
+printf 'tailscale tailscale\n' > /tmp/repos
+out=$(./install-packages-leaves -y -r /tmp/repos /tmp/list 2>&1); rc=$?
+check 'exit 0'                          '[[ $rc -eq 0 ]]'
+check 'no duplicate extrepo source added' '[[ ! -e /etc/apt/sources.list.d/extrepo_tailscale.sources ]]'
+check 'did not offer to enable a repo'  '! grep -q "repo(s) to enable" <<<"$out"'
+check 'tailscale installed from the existing source' 'dpkg -s tailscale >/dev/null 2>&1'
+check 'apt-get update still clean'      '! apt-get update 2>&1 | grep -q -e "^E:" -e Conflicting'
+EOF
+
+scenario 'extrepo: declining the repo prompt changes nothing' "$debian" <<'EOF'
+apt-get update -qq
+printf 'code\n' > /tmp/list
+# The same repository on two lines must still be offered (and enabled) once.
+printf 'vscode code\nvscode code\n' > /tmp/repos
+out=$(printf 'n\n' | ./install-packages-leaves -r /tmp/repos /tmp/list 2>&1); rc=$?
+check 'exit 1 (declined)'               '[[ $rc -eq 1 ]]'
+check 'repo listed twice is offered once' 'grep -q "^1 vendor repo(s) to enable" <<<"$out"'
+check 'extrepo not installed'           '! command -v extrepo >/dev/null'
+check 'no repo enabled'                 '! compgen -G "/etc/apt/sources.list.d/extrepo_*" >/dev/null'
+check 'code reported as not found'      'grep -A1 "not found by apt" <<<"$out" | grep -q code'
+out=$(./install-packages-leaves -r /nope /tmp/list 2>&1 </dev/null); rc=$?
+check 'missing -r file is a usage error' '[[ $rc -eq 2 ]] && grep -q "no such repos file" <<<"$out"'
+EOF
+
+scenario 'a package that would need a removal is skipped, not installed' "$debian" <<'EOF'
+apt-get update -qq
+apt-get install -y -qq postfix >/dev/null 2>&1
+# exim4-daemon-light can only be installed by removing postfix. The script
+# installs only, so it must decline rather than take postfix with it.
+printf 'exim4-daemon-light\nhtop\n' > /tmp/list
+out=$(./install-packages-leaves -y /tmp/list 2>&1); rc=$?
+grep -E '^(warning|  [a-z])' <<<"$out" | sed 's/^/    | /'
+check 'exit 0 (a warning, not a failure)' '[[ $rc -eq 0 ]]'
+check 'postfix was not removed'         'dpkg -s postfix >/dev/null 2>&1'
+check 'exim4-daemon-light not installed' '! dpkg -s exim4-daemon-light >/dev/null 2>&1'
+check 'htop still installed'            'dpkg -s htop >/dev/null 2>&1'
+check 'warning names the package'       'grep -q "^  exim4-daemon-light: " <<<"$out"'
+EOF
+
+scenario 'a broken extrepo config is a warning, not a dead run' "$debian" <<'EOF'
+apt-get update -qq
+apt-get install -y -qq extrepo >/dev/null 2>&1
+rm -f /etc/extrepo/config.yaml
+printf 'code\nhtop\nnot-in-any-repo\n' > /tmp/list
+printf 'vscode code\n' > /tmp/repos
+out=$(./install-packages-leaves -y -r /tmp/repos /tmp/list 2>&1); rc=$?
+grep -E '^(warning|could not|  [a-z])' <<<"$out" | sed 's/^/    | /'
+check 'run survived the broken config' 'grep -q "^warning: could not enable vscode" <<<"$out"'
+check 'still installed what it could'  'dpkg -s htop >/dev/null 2>&1'
+check 'still reached the not-found report' 'grep -q "not found by apt" <<<"$out"'
+check 'both unusable packages reported' 'grep -A2 "not found by apt" <<<"$out" | grep -q code && grep -A2 "not found by apt" <<<"$out" | grep -q not-in-any-repo'
+check 'exit 0'                         '[[ $rc -eq 0 ]]'
+EOF
+
+scenario 'unknown repo and unsatisfiable package are warnings' "$debian" <<'EOF'
+apt-get update -qq
+apt-get install -y -qq apt-utils >/dev/null 2>&1
+# A local repository offering a package whose dependency exists nowhere.
+mkdir -p /srv/repo /tmp/broken/DEBIAN
+cat > /tmp/broken/DEBIAN/control <<'CONTROL'
+Package: dummy-broken
+Version: 1.0
+Architecture: all
+Maintainer: Test <test@example.invalid>
+Depends: definitely-missing-dependency
+Description: available, but can never be installed
+CONTROL
+dpkg-deb --build /tmp/broken /srv/repo/dummy-broken.deb >/dev/null
+(cd /srv/repo && apt-ftparchive packages . > Packages)
+echo 'deb [trusted=yes] file:/srv/repo ./' > /etc/apt/sources.list.d/local.list
+apt-get update -qq
+printf 'dummy-broken\nhtop\nnot-in-any-repo\n' > /tmp/list
+printf 'no-such-extrepo-repo not-in-any-repo\n' > /tmp/repos
+out=$(./install-packages-leaves -y -r /tmp/repos /tmp/list 2>&1); rc=$?
+echo "$out" | grep -E '^(warning|  |enabled|apt cannot)' | sed 's/^/    | /'
+check 'exit 0 (all problems are warnings)' '[[ $rc -eq 0 ]]'
+check 'htop still installed'            'dpkg -s htop >/dev/null 2>&1'
+check 'dummy-broken warned with the unmet dependency' 'grep -A1 "cannot be installed" <<<"$out" | grep -q "dummy-broken: Depends: definitely-missing-dependency"'
+check 'unknown repo warned'             'grep -q "^warning: could not enable no-such-extrepo-repo" <<<"$out"'
+check 'not-in-any-repo warned as not found' 'grep -A1 "not found by apt" <<<"$out" | grep -q not-in-any-repo'
+EOF
+
+if [[ $full -eq 1 ]]; then
+scenario 'full: real packages-leaves.txt on a fresh machine' <<'EOF'
+apt-get update -qq
+./install-packages-leaves -y /src/packages-leaves.txt > /tmp/install.log 2>&1; rc=$?
+echo "    installer exit status: $rc"
+echo "    --- last 40 lines of installer output ---"
+tail -40 /tmp/install.log | sed 's/^/    | /'
+grep -v '^#' /src/packages-leaves.txt | sed '/^$/d' | LC_ALL=C sort -u > /tmp/want
+dpkg-query -Wf '${db:Status-Status}\t${Package}\n' \
+    | awk -F'\t' '$1=="installed"{print $2}' | LC_ALL=C sort -u > /tmp/have
+LC_ALL=C comm -23 /tmp/want /tmp/have > /tmp/notinstalled
+echo "    listed: $(wc -l < /tmp/want), installed: $(LC_ALL=C comm -12 /tmp/want /tmp/have | wc -l), not installed: $(wc -l < /tmp/notinstalled)"
+echo "    not installed: $(paste -sd' ' /tmp/notinstalled)"
+check 'installer reached its final report (apt-get did not abort the run)' \
+    'grep -q -e "not found by apt" -e "nothing to do" /tmp/install.log || [[ $rc -eq 0 ]]'
+check 'everything apt could resolve got installed' \
+    '! grep -qxFf /tmp/notinstalled <(sed -n "/to install:/,/^$/p" /tmp/install.log | sed "s/^  //")'
+EOF
+fi
+
+printf '\n=== summary: %d scenario(s) passed, %d failed ===\n' "$passed" "$failed"
+for f in "${failures[@]}"; do printf '  failed: %s\n' "$f"; done
+[[ $failed -eq 0 ]]

@@ -1,0 +1,18 @@
+# Vendor repositories for packages outside the distribution's own archive.
+#
+# Format: <extrepo repository> <package> [<package>...]
+# Find repository names with: extrepo search <term>
+#
+# install-packages-leaves enables a repository (via extrepo) only when one of
+# its packages is listed in packages-leaves.txt, is not installed, and cannot
+# already be found by apt. A repository you configured some other way is
+# therefore never added twice -- two sources for one URL with different
+# signing keys make `apt-get update` fail outright.
+
+vscode      code
+docker-ce   docker-ce docker-model-plugin
+tailscale   tailscale
+dotnet      dotnet-sdk-10.0
+
+# warp-terminal has no extrepo entry; add its repository by hand
+# (https://releases.warp.dev/linux/deb) or it is reported as not found.

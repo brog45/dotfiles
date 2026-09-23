@@ -1,12 +1,36 @@
 #!/usr/bin/bash
 
 # Install every package listed in packages-leaves.txt that is not already
-# installed on this machine. Installs only; never removes anything.
+# installed on this machine. Installs only; never removes anything. apt is
+# run with --no-remove, so a package that could only be installed by removing
+# something already present is reported as a warning and skipped rather than
+# quietly taking the other package with it.
 #
-# Usage: install-packages-leaves [-y] [-h] [list-file]
-#   -y          skip the confirmation prompt (passes -y to apt-get too)
-#   -h          show this help
-#   list-file   read from this file instead of packages-leaves.txt
+# Usage: install-packages-leaves [-y] [-h] [-r repos-file] [list-file]
+#   -y             skip the confirmation prompts
+#   -h             show this help
+#   -r repos-file  read vendor repositories from this file instead of
+#                  packages-leaves-repos.txt
+#   list-file      read from this file instead of packages-leaves.txt
+#
+# Vendor repositories: packages-leaves-repos.txt maps extrepo repositories to
+# the packages they provide. A repository is enabled -- installing extrepo
+# first if necessary -- only when one of its packages is wanted, not
+# installed, and cannot already be found by apt. A repository you set up some
+# other way is therefore never added twice, which would make apt-get update
+# fail on conflicting signing keys. extrepo refuses repositories whose license
+# policy is not enabled; when that happens the contrib policy, and if that is
+# not enough the non-free policy too, is added to /etc/extrepo/config.yaml.
+#
+# The package transaction is simulated first (apt-get -s), so the prompt
+# shows the real total including dependencies. Once you answer y, apt-get
+# runs with -y rather than asking again.
+#
+# Packages that cannot be installed -- no configured repository has them
+# (Pop!_OS-only packages on Debian, warp-terminal without its repository), or
+# their dependencies cannot be satisfied -- are skipped and reported as
+# warnings; everything else is still installed. Listed packages that conflict
+# with each other are an error, since no single transaction can satisfy them.
 #
 # Runs on a bare machine: needs only bash, dpkg, apt, coreutils, sed and awk,
 # all of which any apt-based system already has. No Python, unlike its
@@ -19,10 +43,9 @@
 # already covered and leaves it off the list, so passing
 # --no-install-recommends would leave those packages uninstalled.
 #
-# Packages apt cannot find (typically from a third-party repo that is not
-# configured yet, e.g. docker-ce, code, warp-terminal, tailscale) are skipped
-# and reported at the end. Exit status is 1 if any were skipped, so the script
-# is safe to run repeatedly: add the missing repos, run it again.
+# Exit status: 0 everything installable is installed (warnings allowed);
+# 1 a prompt was declined, listed packages conflict, or apt/extrepo failed;
+# 2 usage or environment error.
 
 set -euo pipefail
 
@@ -30,31 +53,46 @@ set -euo pipefail
 # output stays untranslated for parsing.
 export LC_ALL=C
 
-cd "$(dirname "$(readlink -f "$0")")"
+# Resolve our own location rather than cd'ing into it: file names given on the
+# command line must stay relative to the caller's working directory, and the
+# help text has to keep reading this file no matter how it was invoked.
+script=$(readlink -f "$0")
+script_dir=$(dirname "$script")
 
 assume_yes=0
-aborted=0
+incomplete=0
+repos_file=$script_dir/packages-leaves-repos.txt
+repos_file_given=0
 
 # Print the comment block above, so the help text cannot drift out of sync
 # with it the way a hardcoded line range would.
 usage() {
-    awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "$0"
+    awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "$script"
 }
 
-while getopts ':yh' opt; do
+while getopts ':yhr:' opt; do
     case "$opt" in
         y) assume_yes=1 ;;
         h) usage; exit 0 ;;
+        r) repos_file=$OPTARG; repos_file_given=1 ;;
+        :) printf 'option -%s needs an argument\n\n' "$OPTARG" >&2; usage >&2; exit 2 ;;
         *) printf 'unknown option: -%s\n\n' "$OPTARG" >&2; usage >&2; exit 2 ;;
     esac
 done
 shift $((OPTIND - 1))
 
-list_file=${1:-packages-leaves.txt}
+list_file=${1:-$script_dir/packages-leaves.txt}
 
 if [[ ! -f $list_file ]]; then
     printf 'no such list file: %s\n' "$list_file" >&2
     printf 'run ./update-packages-leaves to generate it.\n' >&2
+    exit 2
+fi
+
+# The default repos file is optional; one named with -r must exist, or a typo
+# would silently disable every vendor repository.
+if [[ $repos_file_given -eq 1 && ! -f $repos_file ]]; then
+    printf 'no such repos file: %s\n' "$repos_file" >&2
     exit 2
 fi
 
@@ -69,6 +107,133 @@ else
     exit 2
 fi
 
+run_as_root() {
+    ${as_root[@]+"${as_root[@]}"} "$@"
+}
+
+# Strip # comments and surrounding whitespace; drop blank lines.
+read_list() {
+    sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$1" | sed '/^$/d'
+}
+
+# True when -y was given or the user answers y. EOF on stdin counts as "no"
+# instead of tripping set -e.
+confirm() {
+    [[ $assume_yes -eq 1 ]] && return 0
+    local reply
+    read -r -p "$1 [y/N] " reply || reply=
+    [[ $reply == [yY] || $reply == [yY][eE][sS] ]]
+}
+
+has_candidate() {
+    local candidate
+    candidate=$(apt-cache policy -- "$1" 2>/dev/null | awk '/^  Candidate:/ { print $2 }')
+    [[ -n $candidate && $candidate != '(none)' ]]
+}
+
+# Split missing packages by whether apt can currently find them. One
+# apt-cache run for the whole set, not one per package: each invocation
+# reloads the package cache, which dominates the cost. Packages apt does not
+# know at all are simply absent from its output.
+classify() {
+    available=()
+    unavailable=()
+    local pkg
+    local -A found=()
+    while read -r pkg; do
+        found[$pkg]=1
+    done < <(apt-cache policy -- "${missing[@]}" 2>/dev/null |
+        awk '/^[^ \t]/ { name = substr($0, 1, length($0) - 1); next }
+             /^  Candidate: / { if ($2 != "(none)") print name }')
+    for pkg in "${missing[@]}"; do
+        if [[ -n ${found[$pkg]:-} ]]; then
+            available+=("$pkg")
+        else
+            unavailable+=("$pkg")
+        fi
+    done
+}
+
+# True when the first argument appears among the rest.
+contains() {
+    local needle=$1 item
+    shift
+    for item in "$@"; do
+        [[ $item == "$needle" ]] && return 0
+    done
+    return 1
+}
+
+# extrepo writes one sources file per repository; disabling it keeps the
+# file but adds "Enabled: no".
+repo_enabled() {
+    local file=/etc/apt/sources.list.d/extrepo_$1.sources
+    [[ -f $file ]] && ! grep -qi '^enabled:[[:space:]]*no' "$file"
+}
+
+# extrepo reports a missing license policy as a message, not an exit status,
+# so success is judged by whether the repository ended up enabled. Policies
+# are widened one step at a time: contrib, then non-free.
+enable_repo() {
+    local repo=$1 out='' policy
+    for policy in '' contrib non-free; do
+        if [[ -n $policy ]]; then
+            grep -q 'license inclusion policies' <<<"$out" || break
+            # A failed edit must not kill the whole run under set -e: fall
+            # through to the warning below with extrepo's own message.
+            if ! grep -qx -- "- $policy" /etc/extrepo/config.yaml 2>/dev/null; then
+                if ! run_as_root sed -i "/^enabled_policies:/a - $policy" \
+                    /etc/extrepo/config.yaml; then
+                    printf 'could not add the %s license policy to /etc/extrepo/config.yaml\n' \
+                        "$policy" >&2
+                    break
+                fi
+                printf 'added the %s license policy to /etc/extrepo/config.yaml (needed by %s)\n' \
+                    "$policy" "$repo"
+            fi
+        fi
+        out=$(run_as_root extrepo enable "$repo" 2>&1) || true
+        if repo_enabled "$repo"; then
+            printf 'enabled %s\n' "$repo"
+            return 0
+        fi
+    done
+    printf 'warning: could not enable %s:\n' "$repo" >&2
+    # shellcheck disable=SC2001  # indents every line; ${out//} cannot anchor per line
+    sed 's/^/  /' <<<"$out" >&2
+    return 1
+}
+
+enable_repos() {
+    if ! command -v extrepo >/dev/null 2>&1; then
+        if ! has_candidate extrepo; then
+            printf 'warning: extrepo is not available from apt; cannot enable repositories.\n' >&2
+            return
+        fi
+        printf 'installing extrepo...\n'
+        if ! run_as_root apt-get install -y -qq extrepo >/dev/null; then
+            printf 'failed to install extrepo.\n' >&2
+            incomplete=1
+            return
+        fi
+    fi
+
+    local repo enabled_any=0
+    for repo in "${needed_repos[@]}"; do
+        enable_repo "$repo" && enabled_any=1
+    done
+
+    if [[ $enabled_any -eq 1 ]]; then
+        printf 'updating package lists...\n'
+        if ! run_as_root apt-get update -qq; then
+            printf 'apt-get update failed; see its output above.\n' >&2
+            incomplete=1
+        fi
+        classify
+    fi
+    printf '\n'
+}
+
 installed=$(mktemp)
 wanted=$(mktemp)
 trap 'rm -f "$installed" "$wanted"' EXIT
@@ -78,8 +243,7 @@ trap 'rm -f "$installed" "$wanted"' EXIT
 dpkg-query -Wf '${db:Status-Status}\t${Package}\n' \
     | awk -F'\t' '$1 == "installed" { print $2 }' | sort -u > "$installed"
 
-# Ignore blank lines and # comments so the list stays hand-editable.
-sed -e 's/#.*//' -e 's/[[:space:]]//g' "$list_file" | sed '/^$/d' | sort -u > "$wanted"
+read_list "$list_file" | sort -u > "$wanted"
 
 mapfile -t missing < <(comm -23 "$wanted" "$installed")
 
@@ -98,43 +262,110 @@ if ! compgen -G '/var/lib/apt/lists/*Packages*' > /dev/null; then
     exit 2
 fi
 
-# Split the missing packages by whether apt can actually resolve them.
-available=()
-unavailable=()
-for pkg in "${missing[@]}"; do
-    candidate=$(apt-cache policy -- "$pkg" 2>/dev/null | awk '/^  Candidate:/ { print $2 }')
-    if [[ -n $candidate && $candidate != '(none)' ]]; then
-        available+=("$pkg")
+classify
+
+# Vendor repositories worth enabling: they provide a wanted package that apt
+# cannot find yet. Already-enabled ones are skipped; enabling them again
+# would not make their missing packages appear.
+needed_repos=()
+if [[ ${#unavailable[@]} -gt 0 && -f $repos_file ]]; then
+    while read -r -a fields; do
+        repo=${fields[0]}
+        for pkg in "${fields[@]:1}"; do
+            if contains "$pkg" ${unavailable[@]+"${unavailable[@]}"}; then
+                # A repository listed on more than one line must still be
+                # enabled only once.
+                if ! repo_enabled "$repo" &&
+                    ! contains "$repo" ${needed_repos[@]+"${needed_repos[@]}"}; then
+                    needed_repos+=("$repo")
+                fi
+                break
+            fi
+        done
+    done < <(read_list "$repos_file")
+fi
+
+if [[ ${#needed_repos[@]} -gt 0 ]]; then
+    printf '%d vendor repo(s) to enable with extrepo:\n' "${#needed_repos[@]}"
+    printf '  %s\n' "${needed_repos[@]}"
+    printf '\n'
+    if confirm 'enable these?'; then
+        enable_repos
     else
-        unavailable+=("$pkg")
+        printf 'skipped enabling repositories.\n\n'
+        incomplete=1
     fi
-done
+fi
+
+broken=()
+broken_reasons=''
+if [[ ${#available[@]} -gt 0 ]]; then
+    # Simulation needs no root. It lets the prompt show what apt will really
+    # do, and catches problems before anything is installed.
+    if ! plan=$(apt-get install -s --no-remove -- "${available[@]}" 2>&1); then
+        # Set aside packages that cannot be installed even on their own, so
+        # one unsatisfiable package does not block all the others.
+        installable=()
+        for pkg in "${available[@]}"; do
+            if reason=$(apt-get install -s --no-remove -- "$pkg" 2>&1); then
+                installable+=("$pkg")
+            else
+                # First line naming the package and its problem, or apt's
+                # error; the rest of apt's solver trace is noise here.
+                detail=$(grep -m1 -e '^ .* : ' -e '^E: ' <<<"$reason" || true)
+                detail=${detail#"${detail%%[![:space:]]*}"}   # trim indent
+                detail=${detail#"$pkg : "}                    # do not repeat the name
+                detail=${detail#E: }                          # apt's error prefix
+                broken+=("$pkg")
+                broken_reasons+="  $pkg: ${detail:-cannot be installed}"$'\n'
+            fi
+        done
+        available=(${installable[@]+"${installable[@]}"})
+
+        # Whatever still fails together is a conflict between listed packages.
+        if [[ ${#available[@]} -gt 0 ]] && ! plan=$(apt-get install -s --no-remove -- "${available[@]}" 2>&1); then
+            printf 'apt cannot install these packages together:\n' >&2
+            # `|| true`: when every line is filtered out grep exits 1, which
+            # under set -o pipefail would kill the script before the warnings
+            # below are printed.
+            { grep -v -e '^Inst ' -e '^Conf ' <<<"$plan" || true; } | sed 's/^/  /' >&2
+            incomplete=1
+            available=()
+        fi
+    fi
+fi
 
 if [[ ${#available[@]} -gt 0 ]]; then
-    printf '%d package(s) to install:\n' "${#available[@]}"
+    total=$(grep -c '^Inst ' <<<"$plan" || true)
+    printf '%d package(s) to install (%d including dependencies):\n' \
+        "${#available[@]}" "$total"
     printf '  %s\n' "${available[@]}"
     printf '\n'
 
-    if [[ $assume_yes -eq 1 ]]; then
-        ${as_root[@]+"${as_root[@]}"} apt-get install -y -- "${available[@]}"
+    if confirm 'install these?'; then
+        # Always -y here: the user has already confirmed (or passed -y), so
+        # apt must not ask a second time. A failure falls through to the
+        # report rather than exiting under set -e.
+        if ! run_as_root apt-get install -y --no-remove -- "${available[@]}"; then
+            printf '\napt-get install failed; see its output above.\n' >&2
+            incomplete=1
+        fi
     else
-        read -r -p "install these? [y/N] " reply
-        case "$reply" in
-            [yY]|[yY][eE][sS]) ${as_root[@]+"${as_root[@]}"} apt-get install -- "${available[@]}" ;;
-            # Fall through rather than exit, so the report below still runs.
-            *) printf 'aborted.\n'; aborted=1 ;;
-        esac
+        printf 'aborted.\n'
+        incomplete=1
     fi
 fi
 
 if [[ ${#unavailable[@]} -gt 0 ]]; then
-    printf '\n%d package(s) not found by apt:\n' "${#unavailable[@]}"
+    printf '\nwarning: %d package(s) not found by apt:\n' "${#unavailable[@]}"
     printf '  %s\n' "${unavailable[@]}"
-    printf 'their repositories are probably not configured yet.\n'
-    printf 'run apt-get update first; otherwise add the repos and re-run.\n'
-    exit 1
+    printf 'add their repositories (vendor ones go in %s), or they\n' "$repos_file"
+    printf 'may simply not exist on this distribution.\n'
 fi
 
-[[ $aborted -eq 1 ]] && exit 1
+if [[ ${#broken[@]} -gt 0 ]]; then
+    printf '\nwarning: %d package(s) cannot be installed:\n' "${#broken[@]}"
+    printf '%s' "$broken_reasons"
+fi
 
-exit 0
+exit "$incomplete"

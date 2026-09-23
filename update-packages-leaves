@@ -11,9 +11,9 @@
 # "Requires" covers Pre-Depends, Depends and Recommends. Recommends counts
 # because apt installs recommended packages by default, so a recommended
 # package would reappear on a fresh machine without being listed.
-# install-packages-leaves therefore uses a plain `apt install`, which honours
-# Recommends. Change one and you must change the other, or the list stops
-# round-tripping.
+# install-packages-leaves therefore uses `apt-get install` without
+# --no-install-recommends, which honours Recommends. Change one and you must
+# change the other, or the list stops round-tripping.
 #
 # Alternatives and virtual packages: a group like `vim | vim-gtk3 | vim-tiny`
 # only marks a package as required when exactly one installed package can
@@ -27,6 +27,19 @@
 # entire cycle from the list. This script instead checks what the kept set
 # actually pulls in, and for any group left uncovered promotes one member --
 # preferring a manually installed one -- so the cycle is reachable again.
+#
+# Packages no apt repository provides (leftovers from an older release, or
+# .deb files installed by hand) are left out and printed as a warning: they
+# can never be installed on a fresh machine, so listing them would only add
+# permanent noise to install-packages-leaves' "not found" report. They are
+# removed from the dependency graph before leaves are computed, so anything
+# they alone required is judged on its own merits rather than dropped.
+# That test needs apt's package lists, so their absence is a hard error: with
+# empty lists every package looks unprovided and the whole list would be
+# thrown away.
+#
+# Packages named in packages-leaves-exclude.txt are never listed, and are
+# taken out of the graph the same way.
 
 set -euo pipefail
 
@@ -36,11 +49,33 @@ export LC_ALL=C
 
 cd "$(dirname "$(readlink -f "$0")")"
 
+# Without package lists apt-cache policy offers only /var/lib/dpkg/status for
+# every package, so all of them would look as though no repository provides
+# them and the generated list would come out empty -- overwriting the real
+# one. Same check as install-packages-leaves makes.
+if ! compgen -G '/var/lib/apt/lists/*Packages*' > /dev/null; then
+    printf 'apt has no package lists; every package would look unprovided.\n' >&2
+    printf 'run: sudo apt-get update\n' >&2
+    exit 2
+fi
+
 output=packages-leaves.txt
+exclude_file=packages-leaves-exclude.txt
 
 manual=$(mktemp)
 pkgdata=$(mktemp)
-trap 'rm -f "$manual" "$pkgdata"' EXIT
+policy=$(mktemp)
+exclude=$(mktemp)
+# Built in a temporary file and moved into place only once python3 has
+# succeeded: redirecting straight into $output would truncate the existing
+# list before the generator runs, losing it outright if python3 is missing or
+# raises partway through.
+draft=$(mktemp)
+trap 'rm -f "$manual" "$pkgdata" "$policy" "$exclude" "$draft"' EXIT
+
+if [[ -f $exclude_file ]]; then
+    sed -e 's/#.*//' -e 's/[[:space:]]//g' "$exclude_file" | sed '/^$/d' | sort -u > "$exclude"
+fi
 
 apt-mark showmanual | sort -u > "$manual"
 
@@ -50,12 +85,16 @@ apt-mark showmanual | sort -u > "$manual"
 # balloon by ~1200 entries.
 dpkg-query -Wf '${db:Status-Status}\t${Package}\t${Provides}\t${Pre-Depends}, ${Depends}, ${Recommends}\n' > "$pkgdata"
 
-python3 - "$pkgdata" "$manual" <<'PYTHON' > "$output"
+# Where each installed package can be downloaded from, to spot the ones that
+# exist only in the local dpkg database.
+awk -F'\t' '$1 == "installed" { print $2 }' "$pkgdata" | xargs apt-cache policy > "$policy"
+
+python3 - "$pkgdata" "$manual" "$policy" "$exclude" "$exclude_file" <<'PYTHON' > "$draft"
 import re
 import sys
 from collections import deque
 
-pkgdata_path, manual_path = sys.argv[1], sys.argv[2]
+pkgdata_path, manual_path, policy_path, exclude_path, exclude_name = sys.argv[1:6]
 
 STRIP = re.compile(r"\([^)]*\)|\[[^\]]*\]|<[^>]*>")
 ARCH = re.compile(r":[A-Za-z0-9]+$")
@@ -85,6 +124,41 @@ with open(pkgdata_path) as fh:
             virtual = clean(atom)
             if virtual:
                 provides.setdefault(virtual, set()).add(name)
+
+# A package is obsolete when every line of its apt-cache policy version table
+# points at /var/lib/dpkg/status, i.e. no configured repository offers any
+# version of it. Headers look like "htop:" or, for a foreign arch, "libc6:i386:".
+# Source lines are a priority then a URL or path. apt right-aligns the
+# priority, so match on shape, not indentation: Pop!_OS pins its repo at 1001,
+# which shifts the column. The "/" keeps an all-digit version line such as
+# "20240118 500" from being mistaken for a source.
+HEADER = re.compile(r"^(\S+?)(?::[A-Za-z0-9]+)?:$")
+SOURCE = re.compile(r"^\s+-?\d+ (\S*/\S*)")
+sourced = set()
+current = None
+with open(policy_path) as fh:
+    for line in fh:
+        header = HEADER.match(line.rstrip("\n"))
+        if header:
+            current = header.group(1)
+            continue
+        source = SOURCE.match(line)
+        if source and current and source.group(1) != "/var/lib/dpkg/status":
+            sourced.add(current)
+
+with open(exclude_path) as fh:
+    excluded = {line.strip() for line in fh if line.strip()} & installed
+
+# Drop obsolete and excluded packages from the graph entirely: obsolete ones
+# cannot exist on a fresh machine and excluded ones are unwanted, so neither
+# may make anything else look "required".
+obsolete = installed - sourced
+removed = obsolete | excluded
+installed -= removed
+for pkg in removed:
+    dep_groups.pop(pkg, None)
+for virtual in provides:
+    provides[virtual] -= removed
 
 # pulls[pkg] = packages pkg is guaranteed to bring in. A dependency group only
 # counts when exactly one installed package can satisfy it; if several
@@ -134,6 +208,28 @@ for pkg in sorted(installed - covered, key=lambda p: (p not in manual, p)):
 
 for pkg in sorted(keep & manual):
     print(pkg)
+
+if excluded:
+    print(f"excluded per {exclude_name}: {' '.join(sorted(excluded))}", file=sys.stderr)
+
+left_out = sorted(obsolete & manual)
+if left_out:
+    print(
+        f"warning: left out {len(left_out)} manually installed package(s) that no\n"
+        "apt repository provides. They are leftovers from an older release or\n"
+        ".deb files installed by hand, and cannot be installed on a fresh machine:",
+        file=sys.stderr,
+    )
+    for pkg in left_out:
+        print(f"  {pkg}", file=sys.stderr)
+    print(
+        "if you no longer need them: sudo apt-mark auto <packages> && sudo apt autoremove",
+        file=sys.stderr,
+    )
 PYTHON
+
+# cat rather than mv: keeps $output's existing ownership and permissions, and
+# mktemp's file lives on /tmp, which may be a different filesystem.
+cat "$draft" > "$output"
 
 printf '%s: %d packages\n' "$output" "$(wc -l < "$output")"
