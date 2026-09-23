@@ -1,0 +1,3 @@
+#!/usr/bin/bash
+set -euo pipefail
+cat vscode-extensions.txt | xargs -L1 code --install-extension
