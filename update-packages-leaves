@@ -39,7 +39,9 @@
 # thrown away.
 #
 # Packages named in packages-leaves-exclude.txt are never listed, and are
-# taken out of the graph the same way.
+# taken out of the graph the same way. Entries are shell-style globs (*, ?,
+# [...]), matched against the whole package name, so a plain name still
+# matches only itself.
 
 set -euo pipefail
 
@@ -93,6 +95,7 @@ python3 - "$pkgdata" "$manual" "$policy" "$exclude" "$exclude_file" <<'PYTHON' >
 import re
 import sys
 from collections import deque
+from fnmatch import fnmatchcase
 
 pkgdata_path, manual_path, policy_path, exclude_path, exclude_name = sys.argv[1:6]
 
@@ -147,7 +150,10 @@ with open(policy_path) as fh:
             sourced.add(current)
 
 with open(exclude_path) as fh:
-    excluded = {line.strip() for line in fh if line.strip()} & installed
+    patterns = [line.strip() for line in fh if line.strip()]
+# fnmatchcase: package names are lowercase by policy, and plain fnmatch would
+# fold case only on case-insensitive platforms.
+excluded = {pkg for pkg in installed if any(fnmatchcase(pkg, pat) for pat in patterns)}
 
 # Drop obsolete and excluded packages from the graph entirely: obsolete ones
 # cannot exist on a fresh machine and excluded ones are unwanted, so neither

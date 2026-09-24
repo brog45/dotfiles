@@ -1,8 +1,13 @@
 # Packages update-packages-leaves never lists, even when manually installed.
-# One name per line; text after # is ignored. Excluded packages are removed
+# One name or shell-style glob (*, ?, [...]) per line, e.g. language-pack-*;
+# text after # is ignored. Excluded packages are removed
 # from the dependency graph before leaves are computed, so anything only they
 # required is judged on its own. Excluding a package does not stop it being
 # installed as a dependency of something else.
 
 language-pack-en            # Ubuntu-only translation bundle; Debian uses `locales`
 software-properties-common  # add-apt-repository; Ubuntu-only, superseded by extrepo
+libreoffice*
+hunspell-*
+hyphen-*
+mythes-*
