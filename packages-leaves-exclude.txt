@@ -11,3 +11,4 @@ libreoffice*
 hunspell-*
 hyphen-*
 mythes-*
+pop-desktop
