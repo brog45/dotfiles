@@ -27,9 +27,6 @@ git-gui
 gnome-boxes
 gnome-calculator
 gnome-nettool
-gnome-online-accounts-gtk
-gnome-video-effects
-gnome-weather
 graphviz
 htop
 ibus-chewing
@@ -39,7 +36,6 @@ ibus-table-cangjie5
 ibus-table-quick-classic
 ibus-table-wubi
 init
-isc-dhcp-common
 keepassxc
 latencytop
 libnss3-tools
@@ -48,10 +44,8 @@ nautilus
 nautilus-sendto
 network-manager-pptp-gnome
 npm
-openssh-server
 pandoc
 pango1.0-tools
-pavucontrol
 planner
 plocate
 python3-pip

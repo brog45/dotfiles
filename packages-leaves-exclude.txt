@@ -7,8 +7,14 @@
 
 language-pack-en            # Ubuntu-only translation bundle; Debian uses `locales`
 software-properties-common  # add-apt-repository; Ubuntu-only, superseded by extrepo
+gnome-online-accounts-gtk
+gnome-video-effects
+gnome-weather
+isc-dhcp-common
 libreoffice*
 hunspell-*
 hyphen-*
 mythes-*
+openssh-server
+pavucontrol
 pop-desktop
