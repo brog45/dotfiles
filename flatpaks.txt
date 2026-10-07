@@ -7,5 +7,6 @@ io.github.halfmexican.Mingle
 it.mijorus.smile
 org.chromium.Chromium
 org.gnome.DejaDup
+org.libreoffice.LibreOffice
 org.remmina.Remmina
 org.signal.Signal
