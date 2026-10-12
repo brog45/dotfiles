@@ -1,0 +1,24 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Authorize the SSH key from 090 on jeeves.lan. ssh-copy-id logs in with your
+# password once and appends the public key to ~/.ssh/authorized_keys there;
+# it skips the key if jeeves already accepts it.
+
+host=jeeves.lan
+key=~/.ssh/id_ed25519
+
+if [ ! -f "$key.pub" ]; then
+    echo "No SSH key $key.pub; run 090-ssh-key first" >&2
+    exit 1
+fi
+
+# jeeves is only reachable on the home network.
+if ! getent hosts "$host" >/dev/null; then
+    echo "Warning: $host not found (not on the home network?); skipping" >&2
+    echo "Rerun $0 from home to authorize the key there" >&2
+    exit 0
+fi
+
+ssh-copy-id -i "$key.pub" "$host"

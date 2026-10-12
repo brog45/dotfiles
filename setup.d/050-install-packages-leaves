@@ -58,10 +58,11 @@ export LC_ALL=C
 # help text has to keep reading this file no matter how it was invoked.
 script=$(readlink -f "$0")
 script_dir=$(dirname "$script")
+repo_root=$(dirname "$script_dir")
 
 assume_yes=0
 incomplete=0
-repos_file=$script_dir/packages-leaves-repos.txt
+repos_file="$repo_root/packages-leaves-repos.txt"
 repos_file_given=0
 
 # Print the comment block above, so the help text cannot drift out of sync
@@ -81,7 +82,7 @@ while getopts ':yhr:' opt; do
 done
 shift $((OPTIND - 1))
 
-list_file=${1:-$script_dir/packages-leaves.txt}
+list_file=${1:-$repo_root/packages-leaves.txt}
 
 if [[ ! -f $list_file ]]; then
     printf 'no such list file: %s\n' "$list_file" >&2

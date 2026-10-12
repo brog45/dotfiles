@@ -1,0 +1,47 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Show tray icons (such as KeePassXC's) in the top bar. Only GNOME is
+# supported for now; it needs the AppIndicator extension to show them at all.
+
+shell=org.gnome.shell
+extension=appindicatorsupport@rgcjonas.gmail.com
+
+# GNOME is optional: the extension package would pull in gnome-shell, so it is
+# installed here rather than listed in packages-leaves.txt.
+if ! command -v gsettings >/dev/null || ! gsettings list-keys $shell >/dev/null 2>&1; then
+    echo "Warning: GNOME is not installed; skipping tray icon support" >&2
+    exit 0
+fi
+
+# gsettings needs the session bus, or it silently writes to a throwaway
+# in-memory backend. `su -` (used by setup) may not pass the address on.
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+    bus=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus
+    if [ ! -S "$bus" ]; then
+        echo "No session bus; log in to GNOME and rerun $0" >&2
+        exit 1
+    fi
+    export DBUS_SESSION_BUS_ADDRESS=unix:path=$bus
+fi
+
+if ! dpkg-query -W -f '${Status}' gnome-shell-extension-appindicator 2>/dev/null | grep 'ok installed' >/dev/null; then
+    sudo apt install -y gnome-shell-extension-appindicator
+fi
+
+# Add the extension to the enabled list directly: `gnome-extensions enable`
+# fails until GNOME Shell has loaded the extension, which on Wayland happens
+# only at the next login.
+mapfile -t enabled < <(gsettings get $shell enabled-extensions | grep -o "'[^']*'" | tr -d "'")
+if printf '%s\n' "${enabled[@]}" | grep -xF "$extension" >/dev/null; then
+    echo "The AppIndicator extension is already enabled"
+else
+    enabled+=("$extension")
+    list=$(printf "'%s', " "${enabled[@]}")
+    gsettings set $shell enabled-extensions "[${list%, }]"
+    echo "Enabled the AppIndicator extension; log out and back in to see tray icons"
+fi
+
+# Extensions do not load at all while this is on.
+gsettings set $shell disable-user-extensions false

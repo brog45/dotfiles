@@ -1,0 +1,36 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Configure git: default branch main, and the commit author from your GitHub
+# account (your profile name and primary verified email). Uses the gh login
+# from 100, and asks only for what GitHub does not have.
+
+git config --global init.defaultBranch main
+
+# Use SSH (and the key added by 100) for https://github.com/ URLs too, so
+# pushing to a repo cloned over HTTPS does not ask for a username.
+git config --global url."git@github.com:".insteadOf "https://github.com/"
+
+if ! gh auth status --hostname github.com >/dev/null 2>&1; then
+    echo "Not logged in to GitHub; run 100-github-ssh-key first" >&2
+    exit 1
+fi
+
+name=$(gh api user --jq '.name // empty')
+email=$(gh api user/emails --jq '.[] | select(.primary and .verified) | .email')
+
+if [ -z "$name" ]; then
+    default_name=$(git config --global --get user.name || getent passwd "$USER" | cut -d: -f5 | cut -d, -f1)
+    read -r -p "No name on your GitHub profile. Git author name [$default_name]: " name
+    name=${name:-$default_name}
+fi
+
+while [ -z "$email" ]; do
+    read -r -p "No verified primary email on GitHub. Git author email: " email
+done
+
+git config --global user.name "$name"
+git config --global user.email "$email"
+
+echo "Git commits will be authored by $name <$email>"

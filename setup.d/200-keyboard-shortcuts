@@ -1,0 +1,58 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Set keyboard shortcuts (only GNOME is supported for now):
+#   Super+T  run x-terminal-emulator (custom shortcut)
+#   Super+W  Launchers > Launch web browser
+
+media_keys=org.gnome.settings-daemon.plugins.media-keys
+custom_schema=$media_keys.custom-keybinding
+custom_base=/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings
+
+# GNOME is optional: without its settings daemon there is nothing to set.
+if ! command -v gsettings >/dev/null || ! gsettings list-keys $media_keys >/dev/null 2>&1; then
+    echo "Warning: GNOME is not installed; skipping GNOME keyboard shortcuts" >&2
+    exit 0
+fi
+
+# gsettings needs the session bus, or it silently writes to a throwaway
+# in-memory backend. `su -` (used by setup) may not pass the address on.
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+    bus=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus
+    if [ ! -S "$bus" ]; then
+        echo "No session bus; log in to GNOME and rerun $0" >&2
+        exit 1
+    fi
+    export DBUS_SESSION_BUS_ADDRESS=unix:path=$bus
+fi
+
+gsettings set $media_keys www "['<Super>w']"
+
+# Reuse the custom shortcut that already runs the command, so reruns do not
+# add duplicates; otherwise add one at the first unused customN path.
+command=x-terminal-emulator
+mapfile -t paths < <(gsettings get $media_keys custom-keybindings | grep -o "'[^']*'" | tr -d "'")
+
+path=
+for p in "${paths[@]}"; do
+    if [ "$(gsettings get $custom_schema:"$p" command)" = "'$command'" ]; then
+        path=$p
+        break
+    fi
+done
+
+if [ -z "$path" ]; then
+    n=0
+    while printf '%s\n' "${paths[@]}" | grep -qx "$custom_base/custom$n/"; do
+        n=$((n + 1))
+    done
+    path=$custom_base/custom$n/
+    paths+=("$path")
+    list=$(printf "'%s', " "${paths[@]}")
+    gsettings set $media_keys custom-keybindings "[${list%, }]"
+fi
+
+gsettings set $custom_schema:"$path" name 'terminal'
+gsettings set $custom_schema:"$path" command "$command"
+gsettings set $custom_schema:"$path" binding '<Super>t'

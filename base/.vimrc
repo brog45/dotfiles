@@ -10,6 +10,7 @@ nnoremap <silent> <Plug>NetrwBrowseX :call netrw#BrowseX(expand((exists("g:netrw
 inoremap  u
 let &cpo=s:cpo_save
 unlet s:cpo_save
+set autoindent
 set background=dark
 set backspace=indent,eol,start
 set display=truncate
@@ -37,6 +38,7 @@ set termencoding=utf-8
 set ttimeout
 set ttimeoutlen=100
 set wildmenu
+syntax on
 colorscheme koehler
 if has("gui_running")
     set guifont=Fira\ Code\ 14

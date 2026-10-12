@@ -9,7 +9,7 @@
 # therefore never added twice -- two sources for one URL with different
 # signing keys make `apt-get update` fail outright.
 
-vscode      code
+# vscode      code
 docker-ce   docker-ce docker-model-plugin
 tailscale   tailscale
 dotnet      dotnet-sdk-10.0

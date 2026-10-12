@@ -1,0 +1,25 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+SCRIPT=$(readlink -f "$0")
+cd "$(dirname "$SCRIPT")"
+
+if ! groups | tr ' ' '\n' | grep -qx sudo; then
+    echo "Adding $USER to the sudo group"
+    echo "Enter the root password"
+    su -c "usermod -aG sudo $USER"
+
+    echo 'Using "exec su ..." to continue with the sudo group'
+    echo "Enter your own password"
+    exec su - "$USER" -c "cd '$PWD' && '$SCRIPT'"
+else
+    echo "User $USER is a member of the sudo group"
+fi
+
+for installer in setup.d/*; do
+    if [ -x "$installer" ]; then
+        # `set -e` above exits if an installer fails
+        "$installer"
+    fi
+done

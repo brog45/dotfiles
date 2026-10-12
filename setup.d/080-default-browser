@@ -1,0 +1,32 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Make the Zen browser flatpak (installed by 070) the default web browser.
+
+app=app.zen_browser.zen.desktop
+exports=/var/lib/flatpak/exports/share
+
+if [ ! -f "$exports/applications/$app" ]; then
+    echo "No $app; is the Zen flatpak installed?" >&2
+    exit 1
+fi
+
+# xdg-mime works on any desktop: it records the default in mimeapps.list (and,
+# on KDE and LXQt, in their own config too).
+if ! command -v xdg-mime >/dev/null; then
+    sudo apt install -y xdg-utils
+fi
+
+# Skip types already set, so reruns change nothing. Check the file rather than
+# asking `xdg-mime query default`, which reports a fallback app as the default
+# when none has been chosen.
+mimeapps=${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list
+for type in x-scheme-handler/http x-scheme-handler/https text/html application/xhtml+xml; do
+    if [ -f "$mimeapps" ] && grep -qxF "$type=$app" "$mimeapps"; then
+        echo "$app is already the default for $type"
+    else
+        xdg-mime default "$app" "$type"
+        echo "Set $app as the default for $type"
+    fi
+done

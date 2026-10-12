@@ -1,0 +1,23 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Restore the alternatives listed in alternatives.txt (saved by
+# update-alternatives-list).
+
+script=$(readlink -f "$0")
+script_dir=$(dirname "$script")
+repo_root=$(dirname "$script_dir")
+
+# The Zen flatpak (installed by 070) does not register itself as a browser
+# alternative, so register it before restoring a selection that names it.
+zen=/var/lib/flatpak/exports/bin/app.zen_browser.zen
+if [ -x "$zen" ]; then
+    for name in x-www-browser gnome-www-browser; do
+        if ! update-alternatives --list "$name" 2>/dev/null | grep -xF "$zen" >/dev/null; then
+            sudo update-alternatives --install "/usr/bin/$name" "$name" "$zen" 50
+        fi
+    done
+fi
+
+sudo update-alternatives --set-selections < "$repo_root/alternatives.txt"

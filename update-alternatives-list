@@ -1,0 +1,7 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Save the alternatives you chose by hand. Automatic ones are left out, so a
+# new machine makes its own choices for those.
+update-alternatives --get-selections | awk '$2 == "manual"' > alternatives.txt

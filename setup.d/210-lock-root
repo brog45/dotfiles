@@ -1,0 +1,25 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Lock root's password now that the user can use sudo. This blocks logging in
+# as root and `su` with root's password; `sudo -i` still gives a root shell.
+# A locked root password also means recovery mode cannot ask for it, so
+# booting with init=/bin/bash is the way back in if sudo ever breaks.
+
+# Refuse to lock unless sudo works, or there would be no way to become root.
+if ! groups "$USER" | tr ' ' '\n' | grep -qx sudo; then
+    echo "User $USER is not in the sudo group; not locking root" >&2
+    exit 1
+fi
+if ! sudo true; then
+    echo "sudo does not work for $USER; not locking root" >&2
+    exit 1
+fi
+
+if [ "$(sudo passwd -S root | cut -d' ' -f2)" = L ]; then
+    echo "The root password is already locked"
+else
+    echo "Locking the root password"
+    sudo passwd -l root
+fi

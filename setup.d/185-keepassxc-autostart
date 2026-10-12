@@ -1,0 +1,36 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Start the KeePassXC flatpak (installed by 070) when you log in. Autostart
+# entries in ~/.config/autostart work in GNOME, KDE, Xfce and other desktops.
+
+app=org.keepassxc.KeePassXC
+launcher=/var/lib/flatpak/exports/bin/$app
+
+if [ ! -x "$launcher" ]; then
+    echo "No $launcher; is the KeePassXC flatpak installed?" >&2
+    exit 1
+fi
+
+# Same file name KeePassXC uses for its own "launch at system startup" entry,
+# so the two cannot end up as duplicate entries. This replaces any older entry
+# (such as one from the apt package that runs `keepassxc`).
+mkdir -p ~/.config/autostart
+cat > ~/.config/autostart/$app.desktop <<DESKTOP
+[Desktop Entry]
+Name=KeePassXC
+GenericName=Password Manager
+Exec=$launcher
+TryExec=$launcher
+Icon=$app
+StartupWMClass=keepassxc
+Terminal=false
+Type=Application
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=2
+X-KDE-autostart-after=panel
+X-LXQt-Need-Tray=true
+DESKTOP
+
+echo "KeePassXC will start when you log in"

@@ -1,0 +1,14 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+script=$(readlink -f "$0")
+script_dir=$(dirname "$script")
+repo_root=$(dirname "$script_dir")
+
+sudo apt install -y flatpak
+
+flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+
+sudo flatpak install --system -y $(cat $repo_root/flatpaks.txt) 
+

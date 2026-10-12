@@ -1,0 +1,21 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# The docker group is created by the docker-ce package (050). Membership
+# grants root-equivalent access through the Docker socket.
+
+if ! getent group docker >/dev/null; then
+    echo "No docker group; is docker-ce installed?" >&2
+    exit 1
+fi
+
+# Pass $USER so `groups` reads the group database; with no argument it shows
+# only this session's groups and misses a membership added since login.
+if groups "$USER" | tr ' ' '\n' | grep -qx docker; then
+    echo "User $USER is a member of the docker group"
+else
+    echo "Adding $USER to the docker group"
+    sudo usermod -aG docker "$USER"
+    echo "Log out and back in to use docker without sudo"
+fi

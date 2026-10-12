@@ -4,62 +4,58 @@ This directory contains the dotfiles for my system
 
 ## Requirements
 
-Ensure you have the following installed on your system:
-* git
-* stow
+A Debian-based system, and `git` to check out the repo. On a fresh install your
+user may not be in the `sudo` group yet, so install `git` as root:
 
 ```
-sudo apt install git stow
+su -c 'apt install -y git'
 ```
 
 ## Installation
 
-First, check out the `dotfiles` repo in your `$HOME` directory using `git`.
+Check out the `dotfiles` repo in your `$HOME` directory and run `setup`.
 
 ```
-mkdir ~/.cargo
-mkdir ~/.config
-mkdir ~/bin
 git clone https://github.com/brog45/dotfiles.git ~/dotfiles
 cd ~/dotfiles
+./setup
 ```
 
-Then use GNU `stow` to create symlinks for the base package (in the `base` subdirectory).
+`setup` first makes sure you are in the `sudo` group. If you are not, it asks
+for the root password to add you, then for your own password to continue with
+the new group. It then runs each executable script in `setup.d/` in order.
+
+Each script can also be run on its own, and is meant to be safe to rerun.
+Log out and back in afterwards to pick up the `docker` group.
+
+To add a step, drop an executable script into `setup.d/` with a number that
+puts it in the right place.
+
+## Stowing packages
+
+`setup` stows the `base` package. Additional packages (e.g. machine-specific
+configs) can be stowed the same way:
 
 ```
-stow -vv base
+stow -vv --no-folding -t ~ <package-name>
 ```
 
-Additional packages (e.g. machine-specific configs) can be stowed the same way:
+`--no-folding` creates real directories in `$HOME` and links only the files.
 
-```
-stow -vv <package-name>
-```
+## Updating the lists
 
-## Installing packages
-
-`packages.txt` contains a list of additional packages to install.
+After installing or removing software, regenerate the lists that `setup`
+installs from. Run these from the repo root:
 
 ```bash
-sudo apt install $(cat packages.txt)
+./update-packages-leaves     # packages-leaves.txt: apt packages you chose to install
+./update-flatpaks-list       # flatpaks.txt
+./update-vscode-extensions   # vscode-extensions.txt
+./update-alternatives-list   # alternatives.txt: alternatives you set by hand
 ```
 
-## Installing VS Code
+## Tests
 
-VS Code isn't in the default apt repos. The `install-vscode` script adds Microsoft's repo and installs the `code` package.
-
-```bash
-install-vscode
-```
-
-## Installing VS Code extensions
-
-`vscode-extensions.txt` contains a list of VS Code extensions generated using this command:
-```bash
-code --list-extensions > vscode-extensions.txt
-```
-
-Use this command to restore extensions:
-```bash
-cat vscode-extensions.txt | xargs -L1 code --install-extension
-```
+`tests/packages-leaves-docker-test` checks `update-packages-leaves` and
+`setup.d/050-install-packages-leaves` in fresh Docker containers. It needs
+Docker access (the `docker` group) and takes about 15 minutes.

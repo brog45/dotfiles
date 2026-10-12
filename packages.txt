@@ -17,7 +17,6 @@ fonts-noto-ui-core
 fzf
 graphviz
 htop
-keepassxc
 language-pack-en
 logrotate
 mupdf

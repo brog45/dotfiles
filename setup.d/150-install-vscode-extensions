@@ -1,0 +1,11 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+script=$(readlink -f "$0")
+script_dir=$(dirname "$script")
+repo_root=$(dirname "$script_dir")
+
+cat $repo_root/vscode-extensions.txt |
+    xargs -L1 code --install-extension
+

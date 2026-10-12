@@ -1,0 +1,3 @@
+gnome-www-browser              manual   /var/lib/flatpak/exports/bin/app.zen_browser.zen
+x-terminal-emulator            manual   /usr/bin/alacritty
+x-www-browser                  manual   /var/lib/flatpak/exports/bin/app.zen_browser.zen

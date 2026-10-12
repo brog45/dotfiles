@@ -1,0 +1,20 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Create this machine's SSH identity key, used by 100 (GitHub) and 120
+# (jeeves.lan).
+
+key=~/.ssh/id_ed25519
+
+if ! command -v ssh-keygen >/dev/null; then
+    sudo apt install -y openssh-client
+fi
+
+if [ -f "$key" ]; then
+    echo "SSH key $key already exists"
+else
+    echo "Creating SSH key $key (no passphrase)"
+    mkdir -p -m 700 ~/.ssh
+    ssh-keygen -t ed25519 -N "" -f "$key"
+fi

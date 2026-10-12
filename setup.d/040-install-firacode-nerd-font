@@ -1,0 +1,23 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Install FiraCode Nerd Font for the current user (alacritty uses it).
+
+font='FiraCode Nerd Font'
+url=https://github.com/ryanoasis/nerd-fonts/releases/latest/download/FiraCode.tar.xz
+font_dir=~/.local/share/fonts/FiraCodeNerdFont
+
+if [ -n "$(fc-list "$font" family)" ]; then
+    echo "$font is already installed"
+    exit 0
+fi
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+echo "Installing $font"
+curl -fsSL -o "$tmp/FiraCode.tar.xz" "$url"
+mkdir -p "$font_dir"
+tar -xJf "$tmp/FiraCode.tar.xz" -C "$font_dir"
+fc-cache -f "$font_dir"

@@ -1,0 +1,25 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Add this machine to your tailnet, and let $USER run tailscale commands
+# without sudo. tailscale is installed by 050 from Tailscale's repository.
+
+if ! command -v tailscale >/dev/null; then
+    echo "tailscale is not installed; run 050-install-packages-leaves first" >&2
+    exit 1
+fi
+
+# Set the operator first, so `tailscale up` below runs without sudo. `set`
+# changes only this preference, so it is safe to rerun on a connected machine.
+sudo tailscale set --operator="$USER"
+
+state=$(tailscale status --json | grep -o '"BackendState": *"[A-Za-z]*"' || true)
+if [[ $state == *'"Running"' ]]; then
+    echo "This machine is already on your tailnet"
+else
+    # Prints a login URL to open in the browser, then waits for approval.
+    # --operator is repeated because `up` refuses to run if it would silently
+    # reset a setting changed earlier.
+    tailscale up --operator="$USER"
+fi
