@@ -15,7 +15,11 @@ libreoffice*
 hunspell-*
 hyphen-*
 mythes-*
-gnome-shell-extension-appindicator  # pulls in gnome-shell; setup.d/205-tray-icons installs it on GNOME only
+task-*
+
+# pulls in gnome-shell; setup.d/205-tray-icons installs it on GNOME only
+gnome-shell-extension-appindicator
+
 openssh-server
 pavucontrol
 pop-desktop
