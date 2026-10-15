@@ -3,6 +3,7 @@ com.github.PintaProject.Pinta
 com.github.maoschanz.drawing
 com.github.tchx84.Flatseal
 com.github.unrud.VideoDownloader
+com.mattjakeman.ExtensionManager
 io.github.halfmexican.Mingle
 it.mijorus.smile
 org.chromium.Chromium
