@@ -5,7 +5,10 @@ set -euo pipefail
 # Set keyboard shortcuts (only GNOME is supported for now):
 #   Super+T  run x-terminal-emulator (custom shortcut)
 #   Super+W  Launchers > Launch web browser
+#   Alt+Tab  Navigation > Switch windows (every window, not grouped by app)
+#   Super+Tab  Navigation > Switch applications (grouped, GNOME's Alt+Tab)
 
+wm_keys=org.gnome.desktop.wm.keybindings
 media_keys=org.gnome.settings-daemon.plugins.media-keys
 custom_schema=$media_keys.custom-keybinding
 custom_base=/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings
@@ -28,6 +31,13 @@ if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
 fi
 
 gsettings set $media_keys www "['<Super>w']"
+
+# A key can be bound to only one action, so Alt+Tab has to come off
+# switch-applications before it works for switch-windows.
+gsettings set $wm_keys switch-applications "['<Super>Tab']"
+gsettings set $wm_keys switch-applications-backward "['<Shift><Super>Tab']"
+gsettings set $wm_keys switch-windows "['<Alt>Tab']"
+gsettings set $wm_keys switch-windows-backward "['<Shift><Alt>Tab']"
 
 # Reuse the custom shortcut that already runs the command, so reruns do not
 # add duplicates; otherwise add one at the first unused customN path.
