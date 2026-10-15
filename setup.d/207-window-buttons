@@ -1,0 +1,29 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Show a minimize button next to close in window title bars. Only GNOME is
+# supported for now.
+
+wm_prefs=org.gnome.desktop.wm.preferences
+
+# GNOME is optional: without its schemas there is nothing to set.
+if ! command -v gsettings >/dev/null || ! gsettings list-keys $wm_prefs >/dev/null 2>&1; then
+    echo "Warning: GNOME is not installed; skipping title bar buttons" >&2
+    exit 0
+fi
+
+# gsettings needs the session bus, or it silently writes to a throwaway
+# in-memory backend. `su -` (used by setup) may not pass the address on.
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+    bus=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus
+    if [ ! -S "$bus" ]; then
+        echo "No session bus; log in to GNOME and rerun $0" >&2
+        exit 1
+    fi
+    export DBUS_SESSION_BUS_ADDRESS=unix:path=$bus
+fi
+
+# Buttons left of the colon go on the left of the title bar, the rest on the
+# right. GNOME's default is 'appmenu:close'.
+gsettings set $wm_prefs button-layout 'appmenu:minimize,maximize,close'
