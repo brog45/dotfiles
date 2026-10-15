@@ -4,7 +4,7 @@ set -euo pipefail
 
 cd "$(dirname "$(readlink -f "$0")")/.."
 
-sudo apt install -y curl stow
+sudo apt install -y stow
 
 # --no-folding creates the subdirectories, so stow only links the files
 stow -vv --no-folding -t ~ base

@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+sudo apt install -y curl
+
 # Install FiraCode Nerd Font for the current user (alacritty uses it).
 
 font='FiraCode Nerd Font'
