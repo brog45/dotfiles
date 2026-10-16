@@ -20,7 +20,11 @@ ibus-chewing
 ibus-libpinyin
 ibus-table-*
 fonts-arphic-*
-fonts-noto-cjk-extra
+fonts-noto-cjk*
+fonts-noto-ui-core
+
+# System76 hardware drivers the Pop!_OS ISO installs as manual, on any hardware
+system76-*-dkms
 
 language-pack-en            # Ubuntu-only translation bundle; Debian uses `locales`
 software-properties-common  # add-apt-repository; Ubuntu-only, superseded by extrepo
