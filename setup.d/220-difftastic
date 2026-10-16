@@ -1,0 +1,10 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+cargo install --locked difftastic
+git config --global diff.external difft
+git config --global difftool.prompt false
+git config --global pager.difftool true
+git config --global diff.tool difftastic
+
