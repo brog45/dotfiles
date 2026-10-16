@@ -8,6 +8,13 @@ repo_root=$(dirname "$script_dir")
 
 sudo apt install -y flatpak
 
+# Let GNOME Software browse and update flatpaks. GNOME is optional: the plugin
+# would pull in GNOME Software, so it is installed here rather than listed in
+# packages-leaves.txt.
+if [ "$(dpkg-query -W -f '${db:Status-Status}' gnome-shell 2>/dev/null)" = installed ]; then
+    sudo apt install -y gnome-software-plugin-flatpak
+fi
+
 flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 
 sudo flatpak install --system -y $(cat $repo_root/flatpaks.txt) 
