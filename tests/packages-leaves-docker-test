@@ -3,7 +3,10 @@
 # End-to-end tests for update-packages-leaves and
 # setup.d/050-install-packages-leaves, each scenario in a throwaway
 # container: a genuinely fresh machine with no sudo, mawk rather than gawk,
-# and empty apt package lists. Most run on
+# and empty apt package lists. The container's host is named "test"
+# (DOTFILES_HOST), so the generator writes hosts/test/packages-leaves.txt
+# and the installer reads the shared list plus that one; see lib/host-lists.
+# Most run on
 # ubuntu:24.04 (Pop!_OS's base); the extrepo scenarios run on debian:13,
 # which is what extrepo's repository metadata targets.
 #
@@ -24,7 +27,8 @@
 # already installed.
 #
 # Usage: tests/packages-leaves-docker-test [--full]
-#   --full   also install the real packages-leaves.txt into a fresh container
+#   --full   also install the real shared packages-leaves.txt plus this
+#            machine's hosts/<host>/packages-leaves.txt into a fresh container
 #            (downloads several GB; takes a long time)
 
 set -uo pipefail
@@ -35,6 +39,8 @@ debian=debian:13@sha256:9cc080028c43b27d2074d63a5f9caf7166d731494965616c1a6d2827
 debian_snapshot=20260918T000000Z
 full=0
 [[ ${1:-} == --full ]] && full=1
+# The machine running the tests, whose host list the --full scenario installs.
+real_host=${DOTFILES_HOST:-$(hostname -s)}
 
 volume=packages-leaves-test-$$
 docker volume create "$volume" >/dev/null
@@ -46,8 +52,8 @@ failures=()
 
 # Run one scenario: stdin is a bash script executed as root in a fresh
 # container (ubuntu unless a second argument names another image), with the
-# scripts copied into a writable /work. On debian, apt is pointed at the
-# archive snapshot before the scenario runs.
+# scripts copied into a writable /work, which has no lists of its own. On
+# debian, apt is pointed at the archive snapshot before the scenario runs.
 scenario() {
     local name=$1 img=${2:-$image}
     printf '\n=== %s [%s] ===\n' "$name" "${img%@*}"
@@ -55,6 +61,7 @@ scenario() {
     if { cat <<'PRELUDE'; cat; printf '\nexit $fail\n'; } \
         | docker run --rm -i -e DEBIAN_FRONTEND=noninteractive \
             -e DEBIAN_SNAPSHOT="$debian_snapshot" \
+            -e DOTFILES_HOST=test -e REAL_HOST="$real_host" \
             -v "$repo:/src:ro" -v "$volume:/vol" "$img" \
             bash -c 'cat > /tmp/scenario; exec bash /tmp/scenario < /dev/null'; then
 set -u
@@ -75,9 +82,10 @@ if [[ -f $sources ]]; then
         exit 1
     fi
 fi
-mkdir -p /work/setup.d
+mkdir -p /work/setup.d /work/lib
 cp /src/update-packages-leaves /work/
 cp /src/setup.d/050-install-packages-leaves /work/setup.d/
+cp /src/lib/host-lists /work/lib/
 cd /work
 PRELUDE
         passed=$((passed + 1))
@@ -96,6 +104,8 @@ check 'sudo is not installed'           '! command -v sudo >/dev/null'
 check 'awk is mawk, not gawk'           '[[ $(readlink -f "$(command -v awk)") == */mawk ]]'
 check 'python3 is not installed'        '! command -v python3 >/dev/null'
 check 'apt package lists are empty'     '! compgen -G "/var/lib/apt/lists/*Packages*" >/dev/null'
+check 'host is named test'              '[[ $DOTFILES_HOST == test ]]'
+check 'no shared or host lists in /work' '! compgen -G "*.txt" >/dev/null && [[ ! -e hosts ]]'
 EOF
 
 scenario 'no package lists: clear error, no sudo in the hint' <<'EOF'
@@ -108,12 +118,15 @@ check 'hint omits sudo when root'       'grep -qx "run: apt-get update" <<<"$out
 # Without package lists every installed package looks as though no repository
 # provides it, so the generator must refuse rather than emit an empty list
 # over the real one.
-printf 'keep-me\n' > packages-leaves.txt
+mkdir -p hosts/test
+printf 'keep-me\n' > hosts/test/packages-leaves.txt
+printf 'shared-keep-me\n' > packages-leaves.txt
 out=$(./update-packages-leaves 2>&1); rc=$?
 echo "$out" | sed 's/^/    | /'
 check 'generator exits 2'               '[[ $rc -eq 2 ]]'
 check 'generator explains why'          'grep -q "no package lists" <<<"$out"'
-check 'generator left the list alone'   'grep -qx keep-me packages-leaves.txt'
+check 'generator left the host list alone' 'grep -qx keep-me hosts/test/packages-leaves.txt'
+check 'generator left the shared list alone' 'grep -qx shared-keep-me packages-leaves.txt'
 EOF
 
 scenario 'nothing to do works without apt lists or python' <<'EOF'
@@ -122,6 +135,21 @@ out=$(./setup.d/050-install-packages-leaves /tmp/list 2>&1); rc=$?
 echo "$out" | sed 's/^/    | /'
 check 'exit status 0'                   '[[ $rc -eq 0 ]]'
 check 'reports 2 packages, ignores comments/blanks' 'grep -q "all 2 packages" <<<"$out"'
+EOF
+
+scenario 'no list argument: shared plus this host, not other hosts' <<'EOF'
+mkdir -p hosts/test hosts/other
+printf 'bash   # shared\ncoreutils\n' > packages-leaves.txt
+printf 'sed\ncoreutils  # also shared: counted once\n' > hosts/test/packages-leaves.txt
+printf 'not-a-real-package-xyz\n' > hosts/other/packages-leaves.txt
+out=$(./setup.d/050-install-packages-leaves 2>&1); rc=$?
+echo "$out" | sed 's/^/    | /'
+check 'exit status 0 (other host ignored)' '[[ $rc -eq 0 ]]'
+check 'reports the 3 distinct packages' 'grep -q "all 3 packages" <<<"$out"'
+check 'names both lists'                'grep -q "packages-leaves.txt and hosts/test/packages-leaves.txt" <<<"$out"'
+rm hosts/test/packages-leaves.txt
+out=$(./setup.d/050-install-packages-leaves 2>&1); rc=$?
+check 'no host file: shared list alone' '[[ $rc -eq 0 ]] && grep -q "all 2 packages" <<<"$out"'
 EOF
 
 scenario 'help and option handling under mawk' <<'EOF'
@@ -210,7 +238,7 @@ EOF
 
 scenario 'generator: no-repo packages warned, exclusions and globs honoured' <<'EOF'
 apt-get update -qq
-apt-get install -y -qq python3 tree cowsay htop >/dev/null 2>&1
+apt-get install -y -qq python3 tree cowsay htop jq figlet >/dev/null 2>&1
 # An exact name, a glob (bracket class and star), a glob that matches nothing,
 # and a bare prefix: patterns match the whole name, so `tre` must not take tree.
 cat > packages-leaves-exclude.txt <<'EXCLUDE'
@@ -219,6 +247,14 @@ h[tx]o*         # glob
 no-such-pkg-*   # matches nothing installed
 tre
 EXCLUDE
+# This host's exclude file adds to the shared one.
+mkdir -p hosts/test hosts/other
+printf 'jq\n' > hosts/test/packages-leaves-exclude.txt
+# figlet is in the shared list, so it does not belong in the host list; sl is
+# shared but not installed here, which is reported.
+printf 'figlet\nsl\n' > packages-leaves.txt
+# Another host lists tree too, which is pointed out as a candidate for sharing.
+printf 'tree\nnot-installed-here\n' > hosts/other/packages-leaves.txt
 # Pop!_OS pins its whole origin at 1001, which widens the priority column on
 # apt-cache policy's source lines. Pin the Ubuntu origin the same way (a
 # per-package pin would only change the version line): every package must
@@ -240,14 +276,22 @@ dpkg -i /tmp/dummy.deb >/dev/null
 check 'dummy is marked manual'          'apt-mark showmanual | grep -qx local-only-dummy'
 out=$(./update-packages-leaves 2>&1); rc=$?
 echo "$out" | sed 's/^/    | /'
+list=hosts/test/packages-leaves.txt
 check 'generator exit 0'                '[[ $rc -eq 0 ]]'
-check 'dummy left out of the list'      '! grep -qx local-only-dummy packages-leaves.txt'
+check 'host list written'               '[[ -s $list ]]'
+check 'shared list untouched'           '[[ $(cat packages-leaves.txt) == $(printf "figlet\nsl") ]]'
+check 'other host list untouched'       '[[ $(cat hosts/other/packages-leaves.txt) == $(printf "tree\nnot-installed-here") ]]'
+check 'dummy left out of the list'      '! grep -qx local-only-dummy $list'
 check 'dummy named in the warning'      'grep -qx "  local-only-dummy" <<<"$out"'
 check 'only the dummy is called obsolete under the pin' '[[ $(grep -c "^  " <<<"$out") -eq 1 ]]'
-check 'tree listed even though only the dummy required it' 'grep -qx tree packages-leaves.txt'
-check 'excluded cowsay not listed'      '! grep -qx cowsay packages-leaves.txt'
-check 'glob-excluded htop not listed'   '! grep -qx htop packages-leaves.txt'
-check 'exclusion is reported'           'grep -q "^excluded per packages-leaves-exclude.txt: cowsay htop$" <<<"$out"'
+check 'tree listed even though only the dummy required it' 'grep -qx tree $list'
+check 'excluded cowsay not listed'      '! grep -qx cowsay $list'
+check 'glob-excluded htop not listed'   '! grep -qx htop $list'
+check 'host-excluded jq not listed'     '! grep -qx jq $list'
+check 'exclusion is reported'           'grep -q "^excluded per packages-leaves-exclude.txt: cowsay htop jq$" <<<"$out"'
+check 'shared figlet left out of the host list' '! grep -qx figlet $list'
+check 'shared sl reported as not installed' 'grep -q "^shared packages not installed here.*: sl$" <<<"$out"'
+check 'tree pointed out as listed for other' 'grep -q "^also listed for other .*: tree$" <<<"$out"'
 EOF
 
 # Round trip. Machine A: install a set chosen to hit every tricky case, then
@@ -255,41 +299,57 @@ EOF
 # machines must end up with identical package sets and identical lists.
 #   language-pack-en     cycle with language-pack-en-base (the cycle fix)
 #   vim-tiny + vim-nox   both satisfy vim-common's `vim | ... | vim-tiny`
-#                        (the sole-candidate rule keeps both)
+#                        (the sole-candidate rule keeps vim-nox). vim-tiny is
+#                        Priority important, so it is skipped as part of the
+#                        base system; this minimal image lacks it, so B gets
+#                        it the way a real fresh install would, not from a list
 #   build-essential      manual, but python3-pip recommends it (must be dropped
 #                        from the list yet still arrive on B via Recommends)
 #   gawk                 second provider of the awk virtual package
+#   htop, tree           in the shared list, so left out of the host list,
+#                        yet installed on B by 050 run with no list argument
 scenario 'round trip, machine A: build and generate' <<'EOF'
 apt-get update -qq
 apt-get install -y -qq python3 language-pack-en vim-tiny vim-nox python3-pip \
     build-essential gawk htop tree >/dev/null 2>&1
 check 'setup packages installed'        'dpkg -s language-pack-en vim-nox python3-pip >/dev/null 2>&1'
+printf 'htop\ntree\n' > packages-leaves.txt
 out=$(./update-packages-leaves 2>&1); rc=$?
-echo "    | $out"
+echo "$out" | sed 's/^/    | /'
+list=hosts/test/packages-leaves.txt
 check 'generator exit 0'                '[[ $rc -eq 0 ]]'
-check 'output is C-sorted'              'LC_ALL=C sort -c packages-leaves.txt'
-check 'cycle: language-pack-en listed'  'grep -qx language-pack-en packages-leaves.txt'
-check 'cycle: -base not listed'         '! grep -qx language-pack-en-base packages-leaves.txt'
-check 'alternatives: vim-tiny listed'   'grep -qx vim-tiny packages-leaves.txt'
-check 'alternatives: vim-nox listed'    'grep -qx vim-nox packages-leaves.txt'
-check 'recommends: build-essential dropped' '! grep -qx build-essential packages-leaves.txt'
-check 'python3-pip listed'              'grep -qx python3-pip packages-leaves.txt'
-check 'gawk listed'                     'grep -qx gawk packages-leaves.txt'
-check 'no arch-qualified names'         '! grep -q : packages-leaves.txt'
+check 'output is C-sorted'              'LC_ALL=C sort -c $list'
+check 'cycle: language-pack-en listed'  'grep -qx language-pack-en $list'
+check 'cycle: -base not listed'         '! grep -qx language-pack-en-base $list'
+check 'base: vim-tiny (important) not listed' '! grep -qx vim-tiny $list'
+check 'alternatives: vim-nox listed'    'grep -qx vim-nox $list'
+check 'recommends: build-essential dropped' '! grep -qx build-essential $list'
+check 'python3-pip listed'              'grep -qx python3-pip $list'
+check 'gawk listed'                     'grep -qx gawk $list'
+check 'shared htop and tree left out'   '! grep -qx -e htop -e tree $list'
+check 'no arch-qualified names'         '! grep -q : $list'
 check 'no obsolete-package warning on a clean machine' '! grep -q warning <<<"$out"'
-cp packages-leaves.txt /vol/L_A
+check 'no shared package reported missing' '! grep -q "not installed here" <<<"$out"'
+cp packages-leaves.txt /vol/S_A
+cp $list /vol/L_A
 dpkg-query -Wf '${db:Status-Status}\t${Package}\n' \
     | awk -F'\t' '$1=="installed"{print $2}' | LC_ALL=C sort -u > /vol/I_A
-echo "    list: $(wc -l < /vol/L_A) packages; machine: $(wc -l < /vol/I_A) installed"
+echo "    lists: $(wc -l < /vol/S_A) shared + $(wc -l < /vol/L_A) host packages; machine: $(wc -l < /vol/I_A) installed"
 EOF
 
-scenario 'round trip, machine B: install from list, compare' <<'EOF'
+scenario 'round trip, machine B: install shared + host lists, compare' <<'EOF'
 apt-get update -qq
-cp /vol/L_A /tmp/list
-echo not-in-any-repo-xyz >> /tmp/list
-out=$(./setup.d/050-install-packages-leaves -y /tmp/list 2>&1); rc=$?
+# Part of a real fresh install (Priority important), missing from this image.
+apt-get install -y -qq vim-tiny >/dev/null 2>&1
+mkdir -p hosts/test
+cp /vol/S_A packages-leaves.txt
+cp /vol/L_A hosts/test/packages-leaves.txt
+echo not-in-any-repo-xyz >> hosts/test/packages-leaves.txt
+out=$(./setup.d/050-install-packages-leaves -y 2>&1); rc=$?
 check 'installer exit 0 (the planted package is only a warning)' '[[ $rc -eq 0 ]]'
 check 'planted package reported'        'grep -q not-in-any-repo-xyz <<<"$out"'
+check 'shared-only htop and tree installed' 'dpkg -s htop tree >/dev/null 2>&1'
+check 'host-only vim-nox installed'     'dpkg -s vim-nox >/dev/null 2>&1'
 dpkg-query -Wf '${db:Status-Status}\t${Package}\n' \
     | awk -F'\t' '$1=="installed"{print $2}' | LC_ALL=C sort -u > /tmp/I_B
 if ! diff -q /vol/I_A /tmp/I_B >/dev/null; then
@@ -300,11 +360,13 @@ check 'B has exactly the packages A had' 'diff -q /vol/I_A /tmp/I_B >/dev/null'
 check 'build-essential arrived via Recommends' 'dpkg -s build-essential >/dev/null 2>&1'
 out=$(./update-packages-leaves 2>&1); rc=$?
 check 'generator runs on B'             '[[ $rc -eq 0 ]]'
-if ! diff -q /vol/L_A packages-leaves.txt >/dev/null; then
+list=hosts/test/packages-leaves.txt
+if ! diff -q /vol/L_A $list >/dev/null; then
     echo "    list diff (< A, > B):"
-    diff /vol/L_A packages-leaves.txt | grep '^[<>]' | sed 's/^/      /'
+    diff /vol/L_A $list | grep '^[<>]' | sed 's/^/      /'
 fi
-check 'regenerated list identical to A' 'diff -q /vol/L_A packages-leaves.txt >/dev/null'
+check 'regenerated host list identical to A' 'diff -q /vol/L_A $list >/dev/null'
+check 'shared list untouched'           'diff -q /vol/S_A packages-leaves.txt >/dev/null'
 EOF
 
 # ---- vendor repositories via extrepo (debian:13) ---------------------------
@@ -435,13 +497,18 @@ check 'not-in-any-repo warned as not found' 'grep -A1 "not found by apt" <<<"$ou
 EOF
 
 if [[ $full -eq 1 ]]; then
-scenario 'full: real packages-leaves.txt on a fresh machine' <<'EOF'
+scenario "full: real shared + $real_host packages-leaves.txt on a fresh machine" <<'EOF'
 apt-get update -qq
-./setup.d/050-install-packages-leaves -y /src/packages-leaves.txt > /tmp/install.log 2>&1; rc=$?
+cp /src/packages-leaves.txt .
+[[ -d /src/hosts ]] && cp -r /src/hosts .
+export DOTFILES_HOST=$REAL_HOST
+./setup.d/050-install-packages-leaves -y > /tmp/install.log 2>&1; rc=$?
 echo "    installer exit status: $rc"
 echo "    --- last 40 lines of installer output ---"
 tail -40 /tmp/install.log | sed 's/^/    | /'
-grep -v '^#' /src/packages-leaves.txt | sed '/^$/d' | LC_ALL=C sort -u > /tmp/want
+repo_root=/work
+. lib/host-lists
+wanted_list packages-leaves.txt > /tmp/want
 dpkg-query -Wf '${db:Status-Status}\t${Package}\n' \
     | awk -F'\t' '$1=="installed"{print $2}' | LC_ALL=C sort -u > /tmp/have
 LC_ALL=C comm -23 /tmp/want /tmp/have > /tmp/notinstalled
