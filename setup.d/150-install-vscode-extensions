@@ -5,7 +5,11 @@ set -euo pipefail
 script=$(readlink -f "$0")
 script_dir=$(dirname "$script")
 repo_root=$(dirname "$script_dir")
+# shellcheck source=lib/host-lists
+. "$repo_root/lib/host-lists"
 
-cat $repo_root/vscode-extensions.txt |
-    xargs -L1 code --install-extension
+# The shared vscode-extensions.txt plus this host's
+# hosts/<host>/vscode-extensions.txt.
+wanted_list vscode-extensions.txt |
+    xargs -r -L1 code --install-extension
 

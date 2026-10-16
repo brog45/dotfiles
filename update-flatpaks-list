@@ -2,5 +2,18 @@
 
 set -euo pipefail
 
-flatpak list --columns=app --app > flatpaks.txt
+# Save this host's flatpaks that the shared flatpaks.txt does not list to
+# hosts/<host>/flatpaks.txt (see lib/host-lists).
 
+repo_root=$(dirname "$(readlink -f "$0")")
+# shellcheck source=lib/host-lists
+. "$repo_root/lib/host-lists"
+
+installed=$(flatpak list --columns=app --app)
+write_host_list flatpaks.txt <<<"$installed"
+
+missing=$(missing_shared flatpaks.txt <<<"$installed" | tr '\n' ' ')
+if [[ -n $missing ]]; then
+    printf 'shared flatpaks not installed here (setup.d/070-install-flatpaks installs them): %s\n' \
+        "${missing% }" >&2
+fi

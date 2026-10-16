@@ -1,3 +1,19 @@
 #!/usr/bin/bash
+
 set -euo pipefail
-code --list-extensions > vscode-extensions.txt
+
+# Save this host's VS Code extensions that the shared vscode-extensions.txt
+# does not list to hosts/<host>/vscode-extensions.txt (see lib/host-lists).
+
+repo_root=$(dirname "$(readlink -f "$0")")
+# shellcheck source=lib/host-lists
+. "$repo_root/lib/host-lists"
+
+installed=$(code --list-extensions)
+write_host_list vscode-extensions.txt <<<"$installed"
+
+missing=$(missing_shared vscode-extensions.txt <<<"$installed" | tr '\n' ' ')
+if [[ -n $missing ]]; then
+    printf 'shared extensions not installed here (setup.d/150-install-vscode-extensions installs them): %s\n' \
+        "${missing% }" >&2
+fi

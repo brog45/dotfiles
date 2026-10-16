@@ -2,12 +2,15 @@
 
 set -euo pipefail
 
-# Restore the alternatives listed in alternatives.txt (saved by
-# update-alternatives-list).
+# Restore the alternatives listed in the shared alternatives.txt and this
+# host's hosts/<host>/alternatives.txt (saved by update-alternatives-list).
+# The host file is applied last, so its choices win.
 
 script=$(readlink -f "$0")
 script_dir=$(dirname "$script")
 repo_root=$(dirname "$script_dir")
+# shellcheck source=lib/host-lists
+. "$repo_root/lib/host-lists"
 
 # The Zen flatpak (installed by 070) does not register itself as a browser
 # alternative, so register it before restoring a selection that names it.
@@ -20,4 +23,5 @@ if [ -x "$zen" ]; then
     done
 fi
 
-sudo update-alternatives --set-selections < "$repo_root/alternatives.txt"
+{ read_list "$repo_root/alternatives.txt"; read_list "$host_dir/alternatives.txt"; } |
+    sudo update-alternatives --set-selections

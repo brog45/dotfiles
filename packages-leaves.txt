@@ -1,3 +1,7 @@
+# apt packages to install on every host. Edited by hand: update-packages-leaves
+# writes only hosts/<host>/packages-leaves.txt, the packages one host has
+# beyond these. See lib/host-lists.
+
 alacritty
 ascii
 bat
@@ -6,7 +10,6 @@ calibre
 cmake
 code
 curl
-diffpdf
 distro-info
 docker-ce
 docker-model-plugin
@@ -34,12 +37,10 @@ ripgrep
 rsyslog
 rustup
 shellcheck
-starship
 stow
 syncthing
 tailscale
 texlive-fonts-extra
 tree
 vim-gtk3
-vim-nox
 virt-manager

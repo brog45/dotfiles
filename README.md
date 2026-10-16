@@ -44,15 +44,29 @@ stow -vv --no-folding -t ~ <package-name>
 
 ## Updating the lists
 
-After installing or removing software, regenerate the lists that `setup`
-installs from. Run these from the repo root:
+Each list `setup` installs from comes in two parts:
+
+- a shared file at the repo root, such as `packages-leaves.txt`, installed on
+  every machine and edited by hand;
+- an optional file of the same name in `hosts/<hostname>/`, installed only on
+  that machine.
+
+`setup` installs both. After installing or removing software, regenerate this
+machine's host files:
 
 ```bash
-./update-packages-leaves     # packages-leaves.txt: apt packages you chose to install
-./update-flatpaks-list       # flatpaks.txt
-./update-vscode-extensions   # vscode-extensions.txt
-./update-alternatives-list   # alternatives.txt: alternatives you set by hand
+./update-packages-leaves     # apt packages you chose to install
+./update-flatpaks-list       # flatpaks
+./update-vscode-extensions   # VS Code extensions
+./update-alternatives-list   # alternatives you set by hand
 ```
+
+Each writes only `hosts/<hostname>/`: what this machine has beyond the shared
+file. To give every machine something, move its line into the shared file. The
+scripts point out entries another host lists too, and shared entries this
+machine is missing. `packages-leaves-exclude.txt` works the same way: the
+shared file applies everywhere, `hosts/<hostname>/packages-leaves-exclude.txt`
+only there. Set `DOTFILES_HOST` to use another name than `hostname -s`.
 
 ## Tests
 

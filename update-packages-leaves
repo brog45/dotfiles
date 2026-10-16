@@ -1,7 +1,10 @@
 #!/usr/bin/bash
 
-# Regenerate packages-leaves.txt: the apt packages you chose to install, with
-# anything that arrived as a dependency filtered out.
+# Regenerate this host's hosts/<host>/packages-leaves.txt: the apt packages
+# you chose to install, with anything that arrived as a dependency filtered
+# out, and anything already in the shared packages-leaves.txt left out too.
+# The shared list is edited by hand and installed on every host; see
+# lib/host-lists. Shared packages that are not installed here are reported.
 #
 # A package is listed when BOTH are true:
 #   1. apt-mark reports it as manually installed, and
@@ -51,8 +54,9 @@
 # fresh machine already has them. They stay in the dependency graph, so
 # anything they require is not listed either.
 #
-# Packages named in packages-leaves-exclude.txt are never listed, and are
-# taken out of the graph the same way. Entries are shell-style globs (*, ?,
+# Packages named in packages-leaves-exclude.txt, or in this host's
+# hosts/<host>/packages-leaves-exclude.txt, are never listed, and are taken
+# out of the graph the same way. Entries are shell-style globs (*, ?,
 # [...]), matched against the whole package name, so a plain name still
 # matches only itself.
 
@@ -63,6 +67,9 @@ set -euo pipefail
 export LC_ALL=C
 
 cd "$(dirname "$(readlink -f "$0")")"
+repo_root=$PWD
+# shellcheck source=lib/host-lists
+. lib/host-lists
 
 # Without package lists apt-cache policy offers only /var/lib/dpkg/status for
 # every package, so all of them would look as though no repository provides
@@ -74,7 +81,6 @@ if ! compgen -G '/var/lib/apt/lists/*Packages*' > /dev/null; then
     exit 2
 fi
 
-output=packages-leaves.txt
 exclude_file=packages-leaves-exclude.txt
 
 manual=$(mktemp)
@@ -83,16 +89,14 @@ archive=$(mktemp)
 policy=$(mktemp)
 sources=$(mktemp)
 exclude=$(mktemp)
-# Built in a temporary file and moved into place only once python3 has
-# succeeded: redirecting straight into $output would truncate the existing
-# list before the generator runs, losing it outright if python3 is missing or
-# raises partway through.
+# Built in a temporary file and written out only once python3 has succeeded:
+# writing the host list as it goes would truncate the existing one before the
+# generator runs, losing it outright if python3 is missing or raises partway
+# through.
 draft=$(mktemp)
 trap 'rm -f "$manual" "$pkgdata" "$archive" "$policy" "$sources" "$exclude" "$draft"' EXIT
 
-if [[ -f $exclude_file ]]; then
-    sed -e 's/#.*//' -e 's/[[:space:]]//g' "$exclude_file" | sed '/^$/d' | sort -u > "$exclude"
-fi
+wanted_list "$exclude_file" > "$exclude"
 
 apt-mark showmanual | sort -u > "$manual"
 
@@ -321,8 +325,13 @@ if left_out:
     )
 PYTHON
 
-# cat rather than mv: keeps $output's existing ownership and permissions, and
-# mktemp's file lives on /tmp, which may be a different filesystem.
-cat "$draft" > "$output"
+write_host_list packages-leaves.txt < "$draft"
 
-printf '%s: %d packages\n' "$output" "$(wc -l < "$output")"
+# Installed at all, not just a leaf: a shared package that something here
+# depends on is still present.
+missing=$(awk -F'\t' '$1 == "installed" { print $2 }' "$pkgdata" |
+    missing_shared packages-leaves.txt | tr '\n' ' ')
+if [[ -n $missing ]]; then
+    printf 'shared packages not installed here (setup.d/050-install-packages-leaves installs them): %s\n' \
+        "${missing% }" >&2
+fi

@@ -1,7 +1,8 @@
 #!/usr/bin/bash
 
-# Install every package listed in packages-leaves.txt that is not already
-# installed on this machine. Installs only; never removes anything. apt is
+# Install every package listed in packages-leaves.txt, the shared list, or in
+# this host's hosts/<host>/packages-leaves.txt (see lib/host-lists) that is
+# not already installed on this machine. Installs only; never removes anything. apt is
 # run with --no-remove, so a package that could only be installed by removing
 # something already present is reported as a warning and skipped rather than
 # quietly taking the other package with it.
@@ -11,7 +12,7 @@
 #   -h             show this help
 #   -r repos-file  read vendor repositories from this file instead of
 #                  packages-leaves-repos.txt
-#   list-file      read from this file instead of packages-leaves.txt
+#   list-file      read only this file instead of the shared and host lists
 #
 # Vendor repositories: packages-leaves-repos.txt maps extrepo repositories to
 # the packages they provide. A repository is enabled -- installing extrepo
@@ -59,6 +60,8 @@ export LC_ALL=C
 script=$(readlink -f "$0")
 script_dir=$(dirname "$script")
 repo_root=$(dirname "$script_dir")
+# shellcheck source=lib/host-lists
+. "$repo_root/lib/host-lists"
 
 assume_yes=0
 incomplete=0
@@ -82,11 +85,10 @@ while getopts ':yhr:' opt; do
 done
 shift $((OPTIND - 1))
 
-list_file=${1:-$repo_root/packages-leaves.txt}
+list_file=${1:-}
 
-if [[ ! -f $list_file ]]; then
+if [[ -n $list_file && ! -f $list_file ]]; then
     printf 'no such list file: %s\n' "$list_file" >&2
-    printf 'run ./update-packages-leaves to generate it.\n' >&2
     exit 2
 fi
 
@@ -110,11 +112,6 @@ fi
 
 run_as_root() {
     ${as_root[@]+"${as_root[@]}"} "$@"
-}
-
-# Strip # comments and surrounding whitespace; drop blank lines.
-read_list() {
-    sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$1" | sed '/^$/d'
 }
 
 # True when -y was given or the user answers y. EOF on stdin counts as "no"
@@ -244,13 +241,19 @@ trap 'rm -f "$installed" "$wanted"' EXIT
 dpkg-query -Wf '${db:Status-Status}\t${Package}\n' \
     | awk -F'\t' '$1 == "installed" { print $2 }' | sort -u > "$installed"
 
-read_list "$list_file" | sort -u > "$wanted"
+if [[ -n $list_file ]]; then
+    read_list "$list_file" | sort -u > "$wanted"
+    list_name=$list_file
+else
+    wanted_list packages-leaves.txt > "$wanted"
+    list_name="packages-leaves.txt and ${host_dir#"$repo_root"/}/packages-leaves.txt"
+fi
 
 mapfile -t missing < <(comm -23 "$wanted" "$installed")
 
 if [[ ${#missing[@]} -eq 0 ]]; then
     printf 'nothing to do: all %d packages in %s are installed.\n' \
-        "$(wc -l < "$wanted")" "$list_file"
+        "$(wc -l < "$wanted")" "$list_name"
     exit 0
 fi
 

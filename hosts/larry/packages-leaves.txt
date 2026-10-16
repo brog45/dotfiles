@@ -1,0 +1,3 @@
+diffpdf
+starship
+vim-nox

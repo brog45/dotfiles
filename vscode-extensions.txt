@@ -1,3 +1,7 @@
+# VS Code extensions to install on every host. Edited by hand:
+# update-vscode-extensions writes only hosts/<host>/vscode-extensions.txt. See
+# lib/host-lists.
+
 anthropic.claude-code
 bierner.markdown-mermaid
 editorconfig.editorconfig

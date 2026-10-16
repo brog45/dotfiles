@@ -5,6 +5,8 @@ set -euo pipefail
 script=$(readlink -f "$0")
 script_dir=$(dirname "$script")
 repo_root=$(dirname "$script_dir")
+# shellcheck source=lib/host-lists
+. "$repo_root/lib/host-lists"
 
 sudo apt install -y flatpak
 
@@ -17,5 +19,9 @@ fi
 
 flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 
-sudo flatpak install --system -y $(cat $repo_root/flatpaks.txt) 
+# The shared flatpaks.txt plus this host's hosts/<host>/flatpaks.txt.
+mapfile -t flatpaks < <(wanted_list flatpaks.txt)
+if [ ${#flatpaks[@]} -gt 0 ]; then
+    sudo flatpak install --system -y "${flatpaks[@]}"
+fi
 

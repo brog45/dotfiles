@@ -3,7 +3,8 @@
 # text after # is ignored. Excluded packages are removed
 # from the dependency graph before leaves are computed, so anything only they
 # required is judged on its own. Excluding a package does not stop it being
-# installed as a dependency of something else.
+# installed as a dependency of something else. This file applies on every
+# host; hosts/<host>/packages-leaves-exclude.txt adds to it for one host.
 
 console-setup
 firmware-*
@@ -13,6 +14,13 @@ linux-image-*
 popularity-contest
 shim-signed
 usbutils
+
+# Chinese input methods and fonts the Pop!_OS ISO installs as manual
+ibus-chewing
+ibus-libpinyin
+ibus-table-*
+fonts-arphic-*
+fonts-noto-cjk-extra
 
 language-pack-en            # Ubuntu-only translation bundle; Debian uses `locales`
 software-properties-common  # add-apt-repository; Ubuntu-only, superseded by extrepo
