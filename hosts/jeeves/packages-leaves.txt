@@ -1,0 +1,14 @@
+cpufrequtils
+dovecot-imapd
+geary
+gedit
+gnome-calculator
+keepassxc
+latencytop
+nautilus
+nautilus-sendto
+network-manager-pptp-gnome
+remmina
+sessioninstaller
+tilde
+warp-terminal

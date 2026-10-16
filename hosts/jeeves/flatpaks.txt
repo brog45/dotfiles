@@ -1,0 +1,5 @@
+io.github.avomar.dev-toolbox
+io.github.cosmic_utils.camera
+it.mijorus.whisper
+org.gnome.Evolution
+org.nickvision.tubeconverter
