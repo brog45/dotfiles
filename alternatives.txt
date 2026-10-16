@@ -1,3 +1,11 @@
+editor                         manual   /usr/bin/vim.gtk3
+ex                             manual   /usr/bin/vim.gtk3
 gnome-www-browser              manual   /var/lib/flatpak/exports/bin/app.zen_browser.zen
+rview                          manual   /usr/bin/vim.gtk3
+rvim                           manual   /usr/bin/vim.gtk3
+vi                             manual   /usr/bin/vim.gtk3
+view                           manual   /usr/bin/vim.gtk3
+vim                            manual   /usr/bin/vim.gtk3
+vimdiff                        manual   /usr/bin/vim.gtk3
 x-terminal-emulator            manual   /usr/bin/alacritty
 x-www-browser                  manual   /var/lib/flatpak/exports/bin/app.zen_browser.zen

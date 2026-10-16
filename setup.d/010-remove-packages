@@ -1,7 +1,0 @@
-#!/usr/bin/bash
-
-set -euo pipefail
-
-PACKAGES=('libreoffice*' firefox-esr)
-
-sudo apt remove --auto-remove --purge -y "${PACKAGES[@]}"

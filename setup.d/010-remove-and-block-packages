@@ -1,0 +1,148 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Remove packages I never want, and keep them from coming back. Entries are
+# apt globs. evolution-data-server is deliberately not caught: GNOME Shell's
+# calendar needs it.
+PACKAGES=('libreoffice*' firefox-esr evolution evolution-plugins)
+
+pin=/etc/apt/preferences.d/blocked-packages
+stub=blocked-packages
+
+# 1. Pin them at -1 so apt never installs them again, as a dependency or a
+# recommendation of anything.
+pin_text="# Written by dotfiles setup.d/010-remove-and-block-packages
+Package: ${PACKAGES[*]}
+Pin: release *
+Pin-Priority: -1"
+if [ "$(cat "$pin" 2>/dev/null)" != "$pin_text" ]; then
+    echo "Pinning ${PACKAGES[*]} so apt will not install them"
+    printf '%s\n' "$pin_text" | sudo tee "$pin" >/dev/null
+fi
+
+# 2. Some metapackages hard-depend on them (gnome depends on libreoffice-calc
+# and evolution, among others), so removing them would remove the metapackage
+# too. And when a metapackage goes, apt marks everything it pulled in as
+# manually installed (APT::Never-MarkAuto-Sections), which floods
+# packages-leaves.txt. So install a local stub package that Provides each of
+# those dependencies instead, and the metapackages stay. The list is worked
+# out from the installed task and metapackages, following their Depends and
+# Recommends into further metapackages (task-gnome-desktop recommends gnome),
+# so it follows whatever those packages depend on.
+provides=$(python3 - "${PACKAGES[@]}" <<'PYTHON'
+import re
+import subprocess
+import sys
+from fnmatch import fnmatchcase
+
+patterns = sys.argv[1:]
+
+
+def matches(name):
+    return any(fnmatchcase(name, pat) for pat in patterns)
+
+
+def candidates(names):
+    """Candidate records of the given packages, as {name: {field: value}}."""
+    # Exits non-zero when any name is unknown, but still prints the rest.
+    out = subprocess.run(
+        ["apt-cache", "show", "--no-all-versions", *names],
+        capture_output=True, text=True,
+    ).stdout
+    records = {}
+    for para in out.split("\n\n"):
+        fields = dict(re.findall(r"^([\w-]+): (.*)$", para, re.M))
+        if "Package" in fields:
+            records.setdefault(fields["Package"], fields)
+    return records
+
+
+def groups(record, *fields):
+    """Dependency groups as lists of (name, constraint) alternatives."""
+    for field in fields:
+        for group in record.get(field, "").split(","):
+            alts = []
+            for atom in group.split("|"):
+                m = re.match(r"\s*([^\s(:]+)(?::\S+)?\s*(?:\(([^)]*)\))?", atom)
+                if m:
+                    alts.append((m.group(1), m.group(2)))
+            if alts:
+                yield alts
+
+
+installed = subprocess.run(
+    ["dpkg-query", "-Wf", "${db:Status-Status}\t${Package}\t${Section}\n"],
+    capture_output=True, text=True, check=True,
+).stdout
+queue = [
+    name for status, name, section in (l.split("\t") for l in installed.splitlines())
+    if status == "installed" and section in ("tasks", "metapackages")
+]
+
+seen = set(queue)
+stubs = {}
+while queue:
+    records = candidates(queue)
+    queue = []
+    for record in records.values():
+        for alts in groups(record, "Depends"):
+            # Only a group with no acceptable alternative needs a stub.
+            if all(matches(name) for name, _ in alts):
+                name, constraint = alts[0]
+                stubs.setdefault(name, constraint)
+        for alts in groups(record, "Depends", "Recommends"):
+            for name, _ in alts:
+                if name not in seen:
+                    seen.add(name)
+                    queue.append(name)
+    # Follow only metapackages and tasks; ordinary packages cannot pull in
+    # another metapackage's hard dependency on what is being removed.
+    queue = [
+        name for name, rec in candidates(queue).items()
+        if rec.get("Section", "").split("/")[-1] in ("tasks", "metapackages")
+    ] if queue else []
+
+# A versioned dependency such as "evolution (>= 3.56)" is met by providing
+# exactly the version it names.
+entries = []
+for name, constraint in sorted(stubs.items()):
+    if not constraint:
+        entries.append(name)
+        continue
+    op, version = constraint.split()
+    if op not in (">=", "=", "<="):
+        sys.exit(f"cannot stand in for {name} ({constraint})")
+    entries.append(f"{name} (= {version})")
+print(", ".join(entries))
+PYTHON
+)
+
+if [ -z "$provides" ]; then
+    echo "No installed metapackage depends on ${PACKAGES[*]}"
+elif [ "$(dpkg-query -Wf '${db:Status-Status}\t${Provides}' $stub 2>/dev/null)" != "installed	$provides" ]; then
+    echo "Installing $stub to stand in for: $provides"
+    build=$(mktemp -d)
+    trap 'rm -rf "$build"' EXIT
+    mkdir -p "$build/root/DEBIAN"
+    cat > "$build/root/DEBIAN/control" <<EOF
+Package: $stub
+Version: 1
+Architecture: all
+Maintainer: dotfiles setup <root@localhost>
+Section: misc
+Priority: optional
+Provides: $provides
+Description: stub standing in for packages blocked by dotfiles setup
+ Satisfies metapackage dependencies on packages that
+ setup.d/010-remove-and-block-packages removes and pins away, so that removing
+ them does not remove the metapackages too.
+EOF
+    dpkg-deb --root-owner-group --build "$build/root" "$build/$stub.deb" >/dev/null
+    sudo dpkg -i "$build/$stub.deb"
+    # Auto, so packages-leaves.txt ignores it and it goes when nothing needs it.
+    sudo apt-mark auto $stub >/dev/null
+fi
+
+# 3. Remove them. The stub keeps the metapackages that depend on them.
+sudo apt-get remove --auto-remove --purge -y "${PACKAGES[@]}"

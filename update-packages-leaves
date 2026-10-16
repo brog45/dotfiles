@@ -38,6 +38,19 @@
 # empty lists every package looks unprovided and the whole list would be
 # thrown away.
 #
+# Base system packages are never listed either: those marked Essential, the
+# installer's tasks (Section: tasks, e.g. task-gnome-desktop), and those with
+# Priority required or important (always installed) or standard (the
+# installer's "standard system utilities"). Section and Priority are read from
+# the archive index (apt's lists), not dpkg's database: the archive overrides
+# what a package declares itself, and dpkg keeps the package's own value
+# (netcat-traditional calls itself optional; the archive makes it standard).
+# Priority only counts for packages
+# from the distribution's own archive, since third-party repositories set it
+# carelessly. The installer marks all of these as manually installed, but a
+# fresh machine already has them. They stay in the dependency graph, so
+# anything they require is not listed either.
+#
 # Packages named in packages-leaves-exclude.txt are never listed, and are
 # taken out of the graph the same way. Entries are shell-style globs (*, ?,
 # [...]), matched against the whole package name, so a plain name still
@@ -66,14 +79,16 @@ exclude_file=packages-leaves-exclude.txt
 
 manual=$(mktemp)
 pkgdata=$(mktemp)
+archive=$(mktemp)
 policy=$(mktemp)
+sources=$(mktemp)
 exclude=$(mktemp)
 # Built in a temporary file and moved into place only once python3 has
 # succeeded: redirecting straight into $output would truncate the existing
 # list before the generator runs, losing it outright if python3 is missing or
 # raises partway through.
 draft=$(mktemp)
-trap 'rm -f "$manual" "$pkgdata" "$policy" "$exclude" "$draft"' EXIT
+trap 'rm -f "$manual" "$pkgdata" "$archive" "$policy" "$sources" "$exclude" "$draft"' EXIT
 
 if [[ -f $exclude_file ]]; then
     sed -e 's/#.*//' -e 's/[[:space:]]//g' "$exclude_file" | sed '/^$/d' | sort -u > "$exclude"
@@ -85,19 +100,30 @@ apt-mark showmanual | sort -u > "$manual"
 # an arch qualifier ("gcc-14-base:amd64") while dependency fields use the bare
 # name, so every multiarch package would look unreferenced and the list would
 # balloon by ~1200 entries.
-dpkg-query -Wf '${db:Status-Status}\t${Package}\t${Provides}\t${Pre-Depends}, ${Depends}, ${Recommends}\n' > "$pkgdata"
+dpkg-query -Wf '${db:Status-Status}\t${Package}\t${Essential}\t${Provides}\t${Pre-Depends}, ${Depends}, ${Recommends}\n' > "$pkgdata"
 
 # Where each installed package can be downloaded from, to spot the ones that
 # exist only in the local dpkg database.
 awk -F'\t' '$1 == "installed" { print $2 }' "$pkgdata" | xargs apt-cache policy > "$policy"
 
-python3 - "$pkgdata" "$manual" "$policy" "$exclude" "$exclude_file" <<'PYTHON' > "$draft"
+# Section and Priority of each installed package as the archive index gives
+# them, which may differ from what dpkg recorded (see the header comment).
+# One record per package: the candidate version's.
+awk -F'\t' '$1 == "installed" { print $2 }' "$pkgdata" | xargs apt-cache show --no-all-versions |
+    awk '/^Package: / { pkg = $2 } /^Section: / { sec[pkg] = $2 } /^Priority: / { pri[pkg] = $2 }
+         END { for (p in pri) print p "\t" sec[p] "\t" pri[p] }' > "$archive"
+
+# Every configured source with its origin, to tell the distribution's own
+# packages from third-party ones.
+apt-cache policy > "$sources"
+
+python3 - "$pkgdata" "$archive" "$manual" "$policy" "$sources" "$exclude" "$exclude_file" <<'PYTHON' > "$draft"
 import re
 import sys
 from collections import deque
 from fnmatch import fnmatchcase
 
-pkgdata_path, manual_path, policy_path, exclude_path, exclude_name = sys.argv[1:6]
+pkgdata_path, archive_path, manual_path, policy_path, sources_path, exclude_path, exclude_name = sys.argv[1:8]
 
 STRIP = re.compile(r"\([^)]*\)|\[[^\]]*\]|<[^>]*>")
 ARCH = re.compile(r":[A-Za-z0-9]+$")
@@ -110,16 +136,32 @@ def clean(name):
     return ARCH.sub("", name)           # multiarch qualifier: foo:any, foo:amd64
 
 
+BASE_PRIORITIES = {"required", "important", "standard"}
+
 installed = set()
+base = set()        # part of every Debian install; see the header comment
+base_priority = set()   # base by Priority, if the distribution's archive says so
 provides = {}       # virtual or real name -> packages providing it
 dep_groups = {}     # package -> list of groups, each group a list of atoms
 
+archive = {}       # package -> (section, priority) from the archive index
+with open(archive_path) as fh:
+    for line in fh:
+        name, section, priority = line.rstrip("\n").split("\t")
+        # Sections outside main carry the component: "non-free-firmware/kernel".
+        archive[name] = (section.split("/")[-1], priority)
+
 with open(pkgdata_path) as fh:
     for line in fh:
-        status, name, prov, deps = line.rstrip("\n").split("\t")
+        status, name, essential, prov, deps = line.rstrip("\n").split("\t")
         if status != "installed":       # skip config-files/half-installed states
             continue
         installed.add(name)
+        section, priority = archive.get(name, ("", ""))
+        if essential == "yes" or section == "tasks":
+            base.add(name)
+        elif priority in BASE_PRIORITIES:
+            base_priority.add(name)
         dep_groups[name] = [
             [clean(atom) for atom in group.split("|")] for group in deps.split(",")
         ]
@@ -136,8 +178,9 @@ with open(pkgdata_path) as fh:
 # which shifts the column. The "/" keeps an all-digit version line such as
 # "20240118 500" from being mistaken for a source.
 HEADER = re.compile(r"^(\S+?)(?::[A-Za-z0-9]+)?:$")
-SOURCE = re.compile(r"^\s+-?\d+ (\S*/\S*)")
+SOURCE = re.compile(r"^\s+-?\d+ ((\S*/\S*).*)$")
 sourced = set()
+pkg_sources = {}    # package -> its source lines, minus the priority
 current = None
 with open(policy_path) as fh:
     for line in fh:
@@ -146,8 +189,37 @@ with open(policy_path) as fh:
             current = header.group(1)
             continue
         source = SOURCE.match(line)
-        if source and current and source.group(1) != "/var/lib/dpkg/status":
+        if source and current and source.group(2) != "/var/lib/dpkg/status":
             sourced.add(current)
+            pkg_sources.setdefault(current, set()).add(source.group(1).strip())
+
+# Third-party repositories set Priority too, and not always sensibly
+# (Microsoft's dotnet-sdk is "standard"), so Priority only counts for packages
+# from the distribution's own archive: the origin base-files comes from. The
+# global `apt-cache policy` names each source line's origin on the "release"
+# line under it, e.g. "release v=13,o=Debian,a=stable,...".
+origin_of = {}      # source line, minus the priority -> origin
+with open(sources_path) as fh:
+    last = None
+    for line in fh:
+        source = SOURCE.match(line)
+        if source:
+            last = source.group(1).strip()
+            continue
+        fields = line.strip()
+        if last and fields.startswith("release "):
+            for field in fields[len("release "):].split(","):
+                if field.startswith("o="):
+                    origin_of[last] = field[2:]
+            last = None
+
+
+def origins(pkg):
+    return {origin_of[s] for s in pkg_sources.get(pkg, ()) if s in origin_of}
+
+
+distro = origins("base-files")
+base |= {pkg for pkg in base_priority if origins(pkg) & distro}
 
 with open(exclude_path) as fh:
     patterns = [line.strip() for line in fh if line.strip()]
@@ -206,14 +278,29 @@ with open(manual_path) as fh:
 # dependency cycles: each member is required by another member, so none of them
 # qualified as a leaf. Manually installed members are preferred, so the
 # representative survives the intersection with the manual set below.
+# Only members of a top cycle qualify: one that no other uncovered package
+# pulls in, except from inside the cycle. Otherwise a manually installed
+# dependency of the cycle could be promoted first just for sorting earlier,
+# and listed although the cycle brings it in.
 covered = reachable_from(keep)
-for pkg in sorted(installed - covered, key=lambda p: (p not in manual, p)):
+uncovered = installed - covered
+reach = {pkg: reachable_from({pkg}) for pkg in uncovered}
+tops = [
+    pkg for pkg in uncovered
+    if all(pkg not in reach[other] or other in reach[pkg] for other in uncovered)
+]
+for pkg in sorted(tops, key=lambda p: (p not in manual, p)):
     if pkg not in covered:
         keep.add(pkg)
         covered |= reachable_from({pkg})
 
-for pkg in sorted(keep & manual):
+for pkg in sorted((keep & manual) - base):
     print(pkg)
+
+skipped = (keep & manual) & base
+if skipped:
+    print(f"skipped {len(skipped)} base system package(s) (Essential, tasks, or "
+          f"Priority {'/'.join(sorted(BASE_PRIORITIES))})", file=sys.stderr)
 
 if excluded:
     print(f"excluded per {exclude_name}: {' '.join(sorted(excluded))}", file=sys.stderr)

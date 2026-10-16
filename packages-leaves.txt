@@ -5,8 +5,8 @@ byobu
 calibre
 cmake
 code
-cpufrequtils
-cron
+curl
+diffpdf
 distro-info
 docker-ce
 docker-model-plugin
@@ -16,6 +16,7 @@ extrepo
 ffmpeg
 fonts-firacode
 fzf
+gh
 git-gui
 gnome-boxes
 gnome-nettool
@@ -33,12 +34,12 @@ ripgrep
 rsyslog
 rustup
 shellcheck
+starship
 stow
 syncthing
 tailscale
 texlive-fonts-extra
 tree
-vim
 vim-gtk3
-vim-tiny
+vim-nox
 virt-manager

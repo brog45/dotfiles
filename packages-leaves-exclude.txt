@@ -5,6 +5,15 @@
 # required is judged on its own. Excluding a package does not stop it being
 # installed as a dependency of something else.
 
+console-setup
+firmware-*
+grub-efi-amd64
+installation-report
+linux-image-*
+popularity-contest
+shim-signed
+usbutils
+
 language-pack-en            # Ubuntu-only translation bundle; Debian uses `locales`
 software-properties-common  # add-apt-repository; Ubuntu-only, superseded by extrepo
 gnome-online-accounts-gtk
@@ -15,11 +24,13 @@ libreoffice*
 hunspell-*
 hyphen-*
 mythes-*
-task-*
-
 # pulls in gnome-shell; setup.d/205-tray-icons installs it on GNOME only
 gnome-shell-extension-appindicator
+# pulls in gnome-software; setup.d/070-install-flatpaks installs it on GNOME only
+gnome-software-plugin-flatpak
+flatpak                     # setup.d/070-install-flatpaks installs it
 
 openssh-server
 pavucontrol
 pop-desktop
+vim                         # vim-nox and vim-gtk3 cover it
