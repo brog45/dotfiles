@@ -1,0 +1,7 @@
+discover
+git
+grub-pc
+hplip
+links
+physlock
+sudo
