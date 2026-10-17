@@ -5,3 +5,4 @@ hplip
 links
 physlock
 sudo
+tilde
