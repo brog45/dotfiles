@@ -2,15 +2,15 @@
 
 set -euo pipefail
 
-# Authorize the SSH key from 090 on jeeves.lan. ssh-copy-id logs in with your
-# password once and appends the public key to ~/.ssh/authorized_keys there;
-# it skips the key if jeeves already accepts it.
+# Authorize the SSH key from ssh-key on jeeves.lan. ssh-copy-id logs in with
+# your password once and appends the public key to ~/.ssh/authorized_keys
+# there; it skips the key if jeeves already accepts it.
 
 host=jeeves.lan
 key=~/.ssh/id_ed25519
 
 if [ ! -f "$key.pub" ]; then
-    echo "No SSH key $key.pub; run 090-ssh-key first" >&2
+    echo "No SSH key $key.pub; run ssh-key first" >&2
     exit 1
 fi
 

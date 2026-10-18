@@ -2,8 +2,9 @@
 
 set -euo pipefail
 
-# The docker group is created by the docker-ce package (050). Membership
-# grants root-equivalent access through the Docker socket.
+# The docker group is created by the docker-ce package (installed by
+# install-packages-leaves). Membership grants root-equivalent access through
+# the Docker socket.
 
 if ! getent group docker >/dev/null; then
     echo "No docker group; is docker-ce installed?" >&2

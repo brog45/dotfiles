@@ -36,11 +36,11 @@ libreoffice*
 hunspell-*
 hyphen-*
 mythes-*
-# pulls in gnome-shell; setup.d/205-tray-icons installs it on GNOME only
+# pulls in gnome-shell; setup.d/tray-icons installs it on GNOME only
 gnome-shell-extension-appindicator
-# pulls in gnome-software; setup.d/070-install-flatpaks installs it on GNOME only
+# pulls in gnome-software; setup.d/install-flatpaks installs it on GNOME only
 gnome-software-plugin-flatpak
-flatpak                     # setup.d/070-install-flatpaks installs it
+flatpak                     # setup.d/install-flatpaks installs it
 
 openssh-server
 pavucontrol

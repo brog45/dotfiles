@@ -15,6 +15,6 @@ write_host_list vscode-extensions.txt <<<"$installed"
 
 missing=$(missing_shared vscode-extensions.txt <<<"$installed" | tr '\n' ' ')
 if [[ -n $missing ]]; then
-    printf 'shared extensions not installed here (setup.d/150-install-vscode-extensions installs them): %s\n' \
+    printf 'shared extensions not installed here (setup.d/install-vscode-extensions installs them): %s\n' \
         "${missing% }" >&2
 fi

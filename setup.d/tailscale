@@ -3,10 +3,11 @@
 set -euo pipefail
 
 # Add this machine to your tailnet, and let $USER run tailscale commands
-# without sudo. tailscale is installed by 050 from Tailscale's repository.
+# without sudo. tailscale is installed by install-packages-leaves from
+# Tailscale's repository.
 
 if ! command -v tailscale >/dev/null; then
-    echo "tailscale is not installed; run 050-install-packages-leaves first" >&2
+    echo "tailscale is not installed; run install-packages-leaves first" >&2
     exit 1
 fi
 

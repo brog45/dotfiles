@@ -2,8 +2,8 @@
 
 set -euo pipefail
 
-# Create this machine's SSH identity key, used by 100 (GitHub) and 120
-# (jeeves.lan).
+# Create this machine's SSH identity key, used by github-ssh-key and
+# jeeves-ssh-key (jeeves.lan).
 
 key=~/.ssh/id_ed25519
 

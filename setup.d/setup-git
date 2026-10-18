@@ -4,13 +4,13 @@ set -euo pipefail
 
 # Configure git: default branch main, and the commit author from your GitHub
 # account (your profile name and primary verified email). Keeps an author name
-# and email already in your git config; otherwise signs in with gh (unless 100
-# already did), and asks only for what GitHub does not have.
+# and email already in your git config; otherwise signs in with gh (unless
+# github-ssh-key already did), and asks only for what GitHub does not have.
 
 git config --global init.defaultBranch main
 
-# Use SSH (and the key added by 100) for https://github.com/ URLs too, so
-# pushing to a repo cloned over HTTPS does not ask for a username.
+# Use SSH (and the key added by github-ssh-key) for https://github.com/ URLs
+# too, so pushing to a repo cloned over HTTPS does not ask for a username.
 git config --global url."git@github.com:".insteadOf "https://github.com/"
 
 name=$(git config --global --get user.name || true)
@@ -20,8 +20,8 @@ if [ -n "$name" ] && [ -n "$email" ]; then
     exit 0
 fi
 
-# 100 skips the gh login when SSH to GitHub already works, so log in here if
-# needed. user:email lets gh read your email addresses.
+# github-ssh-key skips the gh login when SSH to GitHub already works, so log in
+# here if needed. user:email lets gh read your email addresses.
 if ! command -v gh >/dev/null; then
     sudo apt install -y gh
 fi

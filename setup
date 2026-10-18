@@ -2,8 +2,50 @@
 
 set -euo pipefail
 
+# Run the setup.d scripts in the order setup.d/_order.txt lists them, or only
+# the ones named as arguments, in the order given.
+
 SCRIPT=$(readlink -f "$0")
 cd "$(dirname "$SCRIPT")"
+
+order=setup.d/_order.txt
+
+# Names from the list, without comments, blank lines and surrounding space.
+mapfile -t steps < <(sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' "$order")
+
+# Check the list against setup.d before running anything, so a script that was
+# added but not listed (or listed but not added) is never silently skipped.
+bad=0
+for dup in $(printf '%s\n' "${steps[@]}" | sort | uniq -d); do
+    echo "$order lists $dup more than once" >&2
+    bad=1
+done
+for step in "${steps[@]}"; do
+    if [ ! -x "setup.d/$step" ]; then
+        echo "$order lists $step, which is not an executable script in setup.d" >&2
+        bad=1
+    fi
+done
+for file in setup.d/*; do
+    name=${file#setup.d/}
+    if [ "$file" != "$order" ] && ! printf '%s\n' "${steps[@]}" | grep -qxF "$name"; then
+        echo "setup.d/$name is not listed in $order" >&2
+        bad=1
+    fi
+done
+for arg in "$@"; do
+    if ! printf '%s\n' "${steps[@]}" | grep -qxF "$arg"; then
+        echo "No setup step $arg in $order" >&2
+        bad=1
+    fi
+done
+if [ "$bad" -ne 0 ]; then
+    exit 1
+fi
+
+if [ $# -gt 0 ]; then
+    steps=("$@")
+fi
 
 if ! groups | tr ' ' '\n' | grep -qx sudo; then
     echo "Adding $USER to the sudo group"
@@ -12,14 +54,16 @@ if ! groups | tr ' ' '\n' | grep -qx sudo; then
 
     echo 'Using "exec su ..." to continue with the sudo group'
     echo "Enter your own password"
-    exec su - "$USER" -c "cd '$PWD' && '$SCRIPT'"
+    args=
+    if [ $# -gt 0 ]; then
+        printf -v args ' %q' "$@"
+    fi
+    exec su - "$USER" -c "cd '$PWD' && '$SCRIPT'$args"
 else
     echo "User $USER is a member of the sudo group"
 fi
 
-for installer in setup.d/*; do
-    if [ -x "$installer" ]; then
-        # `set -e` above exits if an installer fails
-        "$installer"
-    fi
+for step in "${steps[@]}"; do
+    # `set -e` above exits if a step fails
+    "setup.d/$step"
 done

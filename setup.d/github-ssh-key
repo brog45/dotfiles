@@ -2,15 +2,15 @@
 
 set -euo pipefail
 
-# Add the SSH key from 090 to your GitHub account, so git can use
+# Add the SSH key from ssh-key to your GitHub account, so git can use
 # git@github.com:... remotes. If SSH to GitHub already works with the key, does
 # nothing more; otherwise signs in to GitHub with the gh CLI, which opens the
-# browser (made the default by 080) to approve the login.
+# browser (made the default by default-browser) to approve the login.
 
 key=~/.ssh/id_ed25519
 
 if [ ! -f "$key.pub" ]; then
-    echo "No SSH key $key.pub; run 090-ssh-key first" >&2
+    echo "No SSH key $key.pub; run ssh-key first" >&2
     exit 1
 fi
 
@@ -46,7 +46,7 @@ if ! command -v gh >/dev/null; then
 fi
 
 # gh does not request these scopes by default: admin:public_key to add the
-# key, and user:email so 110-setup-git can read your email address. During
+# key, and user:email so setup-git can read your email address. During
 # login gh may offer to upload the key itself; either answer is fine, since the
 # next step adds it if it is still missing.
 scopes=admin:public_key,user:email

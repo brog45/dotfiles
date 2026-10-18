@@ -1,0 +1,30 @@
+# The setup.d scripts that `setup` runs, in order, one name per line. Every
+# script in setup.d must be listed, and every name must be an executable
+# script there. Comments (# to end of line) and blank lines are ignored.
+
+remove-and-block-packages
+install-etc
+apt-update
+install-stow
+install-firacode-nerd-font
+install-packages-leaves
+docker-group
+install-flatpaks
+default-browser
+ssh-key
+github-ssh-key
+setup-git
+jeeves-ssh-key
+tailscale
+install-vscode
+install-vscode-extensions
+install-claude-cli
+rustup
+zen-keepassxc
+keepassxc-autostart
+update-alternatives
+keyboard-shortcuts
+tray-icons
+window-buttons
+lock-root
+difftastic

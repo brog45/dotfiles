@@ -14,6 +14,6 @@ write_host_list flatpaks.txt <<<"$installed"
 
 missing=$(missing_shared flatpaks.txt <<<"$installed" | tr '\n' ' ')
 if [[ -n $missing ]]; then
-    printf 'shared flatpaks not installed here (setup.d/070-install-flatpaks installs them): %s\n' \
+    printf 'shared flatpaks not installed here (setup.d/install-flatpaks installs them): %s\n' \
         "${missing% }" >&2
 fi

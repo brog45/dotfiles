@@ -332,6 +332,6 @@ write_host_list packages-leaves.txt < "$draft"
 missing=$(awk -F'\t' '$1 == "installed" { print $2 }' "$pkgdata" |
     missing_shared packages-leaves.txt | tr '\n' ' ')
 if [[ -n $missing ]]; then
-    printf 'shared packages not installed here (setup.d/050-install-packages-leaves installs them): %s\n' \
+    printf 'shared packages not installed here (setup.d/install-packages-leaves installs them): %s\n' \
         "${missing% }" >&2
 fi

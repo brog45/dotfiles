@@ -12,7 +12,7 @@ stub=blocked-packages
 
 # 1. Pin them at -1 so apt never installs them again, as a dependency or a
 # recommendation of anything.
-pin_text="# Written by dotfiles setup.d/010-remove-and-block-packages
+pin_text="# Written by dotfiles setup (remove-and-block-packages)
 Package: ${PACKAGES[*]}
 Pin: release *
 Pin-Priority: -1"
@@ -134,9 +134,9 @@ Section: misc
 Priority: optional
 Provides: $provides
 Description: stub standing in for packages blocked by dotfiles setup
- Satisfies metapackage dependencies on packages that
- setup.d/010-remove-and-block-packages removes and pins away, so that removing
- them does not remove the metapackages too.
+ Satisfies metapackage dependencies on packages that the
+ remove-and-block-packages setup script removes and pins away, so that
+ removing them does not remove the metapackages too.
 EOF
     dpkg-deb --root-owner-group --build "$build/root" "$build/$stub.deb" >/dev/null
     sudo dpkg -i "$build/$stub.deb"

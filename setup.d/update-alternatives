@@ -13,8 +13,9 @@ repo_root=$(dirname "$script_dir")
 # shellcheck source=lib/host-lists
 . "$repo_root/lib/host-lists"
 
-# The Zen flatpak (installed by 070) does not register itself as a browser
-# alternative, so register it before restoring a selection that names it.
+# The Zen flatpak (installed by install-flatpaks) does not register itself as a
+# browser alternative, so register it before restoring a selection that names
+# it.
 zen=/var/lib/flatpak/exports/bin/app.zen_browser.zen
 if [ -x "$zen" ]; then
     for name in x-www-browser gnome-www-browser; do

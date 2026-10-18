@@ -2,8 +2,9 @@
 
 set -euo pipefail
 
-# Start the KeePassXC flatpak (installed by 070) when you log in. Autostart
-# entries in ~/.config/autostart work in GNOME, KDE, Xfce and other desktops.
+# Start the KeePassXC flatpak (installed by install-flatpaks) when you log in.
+# Autostart entries in ~/.config/autostart work in GNOME, KDE, Xfce and other
+# desktops.
 
 app=org.keepassxc.KeePassXC
 launcher=/var/lib/flatpak/exports/bin/$app

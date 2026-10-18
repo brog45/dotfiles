@@ -2,7 +2,8 @@
 
 set -euo pipefail
 
-# Make the Zen browser flatpak (installed by 070) the default web browser.
+# Make the Zen browser flatpak (installed by install-flatpaks) the default web
+# browser.
 
 app=app.zen_browser.zen.desktop
 

@@ -23,13 +23,22 @@ cd ~/dotfiles
 
 `setup` first makes sure you are in the `sudo` group. If you are not, it asks
 for the root password to add you, then for your own password to continue with
-the new group. It then runs each executable script in `setup.d/` in order.
+the new group. It then runs the scripts in `setup.d/` in the order
+`setup.d/_order.txt` lists them.
+
+To run only some steps, name them, and they run in the order given:
+
+```
+./setup ssh-key github-ssh-key
+```
 
 Each script can also be run on its own, and is meant to be safe to rerun.
 Log out and back in afterwards to pick up the `docker` group.
 
-To add a step, drop an executable script into `setup.d/` with a number that
-puts it in the right place.
+To add a step, drop an executable script into `setup.d/` and add its name to
+`setup.d/_order.txt` where it should run. The list takes `#` comments, so it
+can say why a step goes where it does. `setup` refuses to run anything if a
+script is missing from the list or a listed name has no executable script.
 
 ## Stowing packages
 
@@ -55,8 +64,8 @@ per line. A name with no `profiles/` directory is an error, not skipped.
 ## System config
 
 Files under `etc/` in a host's profiles and in `hosts/<hostname>/` are copied
-into `/etc` at the same paths by `setup.d/015-install-etc`. Where both have
-the same file, the host's wins. Use drop-in directories such as
+into `/etc` at the same paths by the `install-etc` setup script. Where both
+have the same file, the host's wins. Use drop-in directories such as
 `/etc/systemd/logind.conf.d/` rather than replacing a package's own config
 file.
 
@@ -93,5 +102,5 @@ machine is missing. `packages-leaves-exclude.txt` works the same way. Set
 ## Tests
 
 `tests/packages-leaves-docker-test` checks `update-packages-leaves` and
-`setup.d/050-install-packages-leaves` in fresh Docker containers. It needs
+the `install-packages-leaves` setup script in fresh Docker containers. It needs
 Docker access (the `docker` group) and takes about 15 minutes.
