@@ -6,7 +6,9 @@ anthropic.claude-code
 bierner.markdown-mermaid
 editorconfig.editorconfig
 efanzh.graphviz-preview
+mechatroner.rainbow-csv
 ms-azuretools.vscode-containers
+ms-azuretools.vscode-docker
 ms-vscode-remote.remote-containers
 ms-vscode-remote.remote-ssh
 ms-vscode-remote.remote-ssh-edit
@@ -14,4 +16,5 @@ ms-vscode-remote.remote-wsl
 ms-vscode-remote.vscode-remote-extensionpack
 ms-vscode.remote-explorer
 ms-vscode.remote-server
+rust-lang.rust-analyzer
 tomoki1207.pdf

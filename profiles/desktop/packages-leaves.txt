@@ -1,6 +1,5 @@
 alacritty
 ascii
-calibre
 cmake
 code
 docker-ce

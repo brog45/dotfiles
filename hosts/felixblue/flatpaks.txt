@@ -1,0 +1,7 @@
+com.github.PintaProject.Pinta
+com.github.unrud.VideoDownloader
+org.chromium.Chromium
+org.gnome.DejaDup
+org.gnome.Evolution
+org.libreoffice.LibreOffice
+org.remmina.Remmina
