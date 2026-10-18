@@ -2,6 +2,10 @@
 
 set -euo pipefail
 
+repo_root=$(dirname "$(dirname "$(readlink -f "$0")")")
+# shellcheck source=lib/terminal
+. "$repo_root/lib/terminal"
+
 # Configure git: default branch main, and the commit author from your GitHub
 # account (your profile name and primary verified email). Keeps an author name
 # and email already in your git config; otherwise signs in with gh (unless
@@ -26,9 +30,11 @@ if ! command -v gh >/dev/null; then
     sudo apt install -y gh
 fi
 if ! gh auth status --hostname github.com >/dev/null 2>&1; then
-    gh auth login --hostname github.com --git-protocol ssh --web --scopes user:email
+    to_terminal
+    gh auth login --hostname github.com --git-protocol ssh --web --scopes user:email >&3 2>&3
 elif ! gh api user/emails >/dev/null 2>&1; then
-    gh auth refresh --hostname github.com --scopes user:email
+    to_terminal
+    gh auth refresh --hostname github.com --scopes user:email >&3 2>&3
 fi
 
 name=$(gh api user --jq '.name // empty')
@@ -36,12 +42,14 @@ email=$(gh api user/emails --jq '.[] | select(.primary and .verified) | .email')
 
 if [ -z "$name" ]; then
     default_name=$(git config --global --get user.name || getent passwd "$USER" | cut -d: -f5 | cut -d, -f1)
-    read -r -p "No name on your GitHub profile. Git author name [$default_name]: " name
+    to_terminal
+    read -r -p "No name on your GitHub profile. Git author name [$default_name]: " name 2>&3
     name=${name:-$default_name}
 fi
 
 while [ -z "$email" ]; do
-    read -r -p "No verified primary email on GitHub. Git author email: " email
+    to_terminal
+    read -r -p "No verified primary email on GitHub. Git author email: " email 2>&3
 done
 
 git config --global user.name "$name"

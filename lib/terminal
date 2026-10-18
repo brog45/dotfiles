@@ -1,0 +1,19 @@
+# shellcheck shell=bash
+# Sourced by setup and by the setup.d scripts that may need the user. setup
+# sends each step's output to its log and passes the terminal on fd 3; a step
+# run on its own gets its stdout as fd 3. Steps send prompts, and whatever a
+# prompt is about (a package list, a login code), to fd 3.
+
+if ! { true >&3; } 2>/dev/null; then
+    exec 3>&1
+fi
+
+# Call before writing to fd 3, or before running something that prompts on the
+# terminal. Under setup, the first call in a step ends setup's progress line,
+# so the prompt starts on a line of its own, and tells setup it did so.
+to_terminal() {
+    if [ -n "${SETUP_LINE_OPEN:-}" ] && [ ! -e "$SETUP_LINE_OPEN" ]; then
+        : >"$SETUP_LINE_OPEN"
+        echo >&3
+    fi
+}

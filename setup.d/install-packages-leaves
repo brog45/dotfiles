@@ -63,6 +63,8 @@ script_dir=$(dirname "$script")
 repo_root=$(dirname "$script_dir")
 # shellcheck source=lib/host-lists
 . "$repo_root/lib/host-lists"
+# shellcheck source=lib/terminal
+. "$repo_root/lib/terminal"
 
 assume_yes=0
 incomplete=0
@@ -115,12 +117,24 @@ run_as_root() {
     ${as_root[@]+"${as_root[@]}"} "$@"
 }
 
+# Show on stdin what a prompt is about: on the terminal (see lib/terminal),
+# or with -y, where nothing is asked, in the normal output.
+show() {
+    if [[ $assume_yes -eq 1 ]]; then
+        cat
+    else
+        to_terminal
+        cat >&3
+    fi
+}
+
 # True when -y was given or the user answers y. EOF on stdin counts as "no"
 # instead of tripping set -e.
 confirm() {
     [[ $assume_yes -eq 1 ]] && return 0
     local reply
-    read -r -p "$1 [y/N] " reply || reply=
+    to_terminal
+    read -r -p "$1 [y/N] " reply 2>&3 || reply=
     [[ $reply == [yY] || $reply == [yY][eE][sS] ]]
 }
 
@@ -306,9 +320,11 @@ if [[ ${#unavailable[@]} -gt 0 && -f $repos_file ]]; then
 fi
 
 if [[ ${#needed_repos[@]} -gt 0 ]]; then
-    printf '%d vendor repo(s) to enable with extrepo:\n' "${#needed_repos[@]}"
-    printf '  %s\n' "${needed_repos[@]}"
-    printf '\n'
+    {
+        printf '%d vendor repo(s) to enable with extrepo:\n' "${#needed_repos[@]}"
+        printf '  %s\n' "${needed_repos[@]}"
+        printf '\n'
+    } | show
     if confirm 'enable these?'; then
         enable_repos
     else
@@ -357,10 +373,12 @@ fi
 
 if [[ ${#available[@]} -gt 0 ]]; then
     total=$(grep -c '^Inst ' <<<"$plan" || true)
-    printf '%d package(s) to install (%d including dependencies):\n' \
-        "${#available[@]}" "$total"
-    printf '  %s\n' "${available[@]}"
-    printf '\n'
+    {
+        printf '%d package(s) to install (%d including dependencies):\n' \
+            "${#available[@]}" "$total"
+        printf '  %s\n' "${available[@]}"
+        printf '\n'
+    } | show
 
     if confirm 'install these?'; then
         # Always -y here: the user has already confirmed (or passed -y), so

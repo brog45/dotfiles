@@ -3,12 +3,20 @@
 set -euo pipefail
 
 # Run the setup.d scripts in the order setup.d/_order.txt lists them, or only
-# the ones named as arguments, in the order given.
+# the ones named as arguments, in the order given. Each step's output goes to
+# ~/dotfiles-setup.log; the terminal shows one progress line per step, and
+# whatever a step needs to ask (see lib/terminal).
 
 SCRIPT=$(readlink -f "$0")
 cd "$(dirname "$SCRIPT")"
 
 order=setup.d/_order.txt
+
+# This host's profiles; stops here if profiles.txt names one that does not
+# exist.
+repo_root=$PWD
+# shellcheck source=lib/host-lists
+. lib/host-lists
 
 # Names from the list, without comments, blank lines and surrounding space.
 mapfile -t steps < <(sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' "$order")
@@ -59,11 +67,65 @@ if ! groups | tr ' ' '\n' | grep -qx sudo; then
         printf -v args ' %q' "$@"
     fi
     exec su - "$USER" -c "cd '$PWD' && '$SCRIPT'$args"
-else
-    echo "User $USER is a member of the sudo group"
 fi
 
+# shellcheck source=lib/terminal
+. lib/terminal
+
+# Say so before sudo asks for a password. The steps are bash scripts, so they
+# inherit this function in place of the sudo command. sudo itself prompts on
+# the terminal, even with the step's output going to the log.
+sudo() {
+    if ! command sudo -n true 2>/dev/null; then
+        to_terminal
+        echo "${SETUP_STEP:-setup} uses sudo; enter your password" >&3
+        command sudo -v
+    fi
+    command sudo "$@"
+}
+export -f sudo to_terminal
+
+# Once sudo has a password, keep it from timing out during a long step, so it
+# is asked for at most once. Until then this does nothing.
+while sleep 60; do
+    command sudo -n -v 2>/dev/null || true
+done >/dev/null &
+keepalive=$!
+SETUP_LINE_OPEN=$(mktemp -u)
+trap 'kill "$keepalive" 2>/dev/null; rm -f "$SETUP_LINE_OPEN"' EXIT
+export SETUP_LINE_OPEN SETUP_STEP
+
+log=~/dotfiles-setup.log
+printf '\n##### %s at %s\n' "setup${*:+ $*}" "$(date '+%F %T')" >>"$log"
+if [ ${#profiles[@]} -gt 0 ]; then
+    echo "Host $host, with profiles: ${profiles[*]}"
+else
+    echo "Host $host, with no profiles"
+fi
+echo "Full output: $log"
+
+i=0
 for step in "${steps[@]}"; do
-    # `set -e` above exits if a step fails
-    "setup.d/$step"
+    i=$((i + 1))
+    SETUP_STEP=$step
+    rm -f "$SETUP_LINE_OPEN"
+    progress=$(printf '[%2d/%d] %s' "$i" "${#steps[@]}" "$step")
+    printf '%s ... ' "$progress"
+    printf '\n=== %s\n' "$step" >>"$log"
+
+    status=ok
+    if ! "setup.d/$step" >>"$log" 2>&1; then
+        status=failed
+    fi
+
+    # If the step wrote to the terminal, the progress line has ended; repeat it.
+    if [ -e "$SETUP_LINE_OPEN" ]; then
+        printf '%s ... %s\n' "$progress" "$status"
+    else
+        printf '%s\n' "$status"
+    fi
+    if [ "$status" = failed ]; then
+        echo "$step failed; see $log" >&2
+        exit 1
+    fi
 done

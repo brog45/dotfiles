@@ -26,6 +26,15 @@ for the root password to add you, then for your own password to continue with
 the new group. It then runs the scripts in `setup.d/` in the order
 `setup.d/_order.txt` lists them.
 
+`setup` first names the host and the profiles it is using. The terminal then
+shows one line per step and whether it succeeded; the steps' own output goes
+to `~/dotfiles-setup.log`, after that of earlier runs. When a step fails,
+`setup` stops and points to the log. Steps still ask on the terminal
+when they need you: a package list to confirm, a GitHub or Tailscale login, a
+password for jeeves. Before the first `sudo` that needs your password, `setup`
+says which step wants it, and then keeps sudo from asking again for the rest
+of the run.
+
 To run only some steps, name them, and they run in the order given:
 
 ```
@@ -39,6 +48,8 @@ To add a step, drop an executable script into `setup.d/` and add its name to
 `setup.d/_order.txt` where it should run. The list takes `#` comments, so it
 can say why a step goes where it does. `setup` refuses to run anything if a
 script is missing from the list or a listed name has no executable script.
+A step that may need the user sources `lib/terminal` and sends its prompts to
+fd 3, which is the terminal under `setup` and stdout when run on its own.
 
 ## Stowing packages
 

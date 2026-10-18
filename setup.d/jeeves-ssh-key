@@ -2,6 +2,10 @@
 
 set -euo pipefail
 
+repo_root=$(dirname "$(dirname "$(readlink -f "$0")")")
+# shellcheck source=lib/terminal
+. "$repo_root/lib/terminal"
+
 # Authorize the SSH key from ssh-key on jeeves.lan. ssh-copy-id logs in with
 # your password once and appends the public key to ~/.ssh/authorized_keys
 # there. Does nothing on jeeves itself, or if jeeves already accepts the key.
@@ -33,4 +37,5 @@ if ! getent hosts "$host" >/dev/null; then
     exit 0
 fi
 
-ssh-copy-id -i "$key.pub" "$host"
+to_terminal
+ssh-copy-id -i "$key.pub" "$host" >&3 2>&3

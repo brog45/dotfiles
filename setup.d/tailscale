@@ -2,6 +2,10 @@
 
 set -euo pipefail
 
+repo_root=$(dirname "$(dirname "$(readlink -f "$0")")")
+# shellcheck source=lib/terminal
+. "$repo_root/lib/terminal"
+
 # Add this machine to your tailnet, and let $USER run tailscale commands
 # without sudo. tailscale is installed by install-packages-leaves from
 # Tailscale's repository.
@@ -22,5 +26,6 @@ else
     # Prints a login URL to open in the browser, then waits for approval.
     # --operator is repeated because `up` refuses to run if it would silently
     # reset a setting changed earlier.
-    tailscale up --operator="$USER"
+    to_terminal
+    tailscale up --operator="$USER" >&3 2>&3
 fi

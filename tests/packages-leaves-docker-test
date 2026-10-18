@@ -85,7 +85,7 @@ fi
 mkdir -p /work/setup.d /work/lib
 cp /src/update-packages-leaves /work/
 cp /src/setup.d/install-packages-leaves /work/setup.d/
-cp /src/lib/host-lists /work/lib/
+cp /src/lib/host-lists /src/lib/terminal /work/lib/
 cd /work
 PRELUDE
         passed=$((passed + 1))

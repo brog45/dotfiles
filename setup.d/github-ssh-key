@@ -2,6 +2,10 @@
 
 set -euo pipefail
 
+repo_root=$(dirname "$(dirname "$(readlink -f "$0")")")
+# shellcheck source=lib/terminal
+. "$repo_root/lib/terminal"
+
 # Add the SSH key from ssh-key to your GitHub account, so git can use
 # git@github.com:... remotes. If SSH to GitHub already works with the key, does
 # nothing more; otherwise signs in to GitHub with the gh CLI, which opens the
@@ -50,10 +54,13 @@ fi
 # login gh may offer to upload the key itself; either answer is fine, since the
 # next step adds it if it is still missing.
 scopes=admin:public_key,user:email
+# gh shows a one-time code and waits for Enter, so it needs the terminal.
 if ! gh auth status --hostname github.com >/dev/null 2>&1; then
-    gh auth login --hostname github.com --git-protocol ssh --web --scopes "$scopes"
+    to_terminal
+    gh auth login --hostname github.com --git-protocol ssh --web --scopes "$scopes" >&3 2>&3
 elif ! gh api user/keys >/dev/null 2>&1 || ! gh api user/emails >/dev/null 2>&1; then
-    gh auth refresh --hostname github.com --scopes "$scopes"
+    to_terminal
+    gh auth refresh --hostname github.com --scopes "$scopes" >&3 2>&3
 fi
 
 # Compare type and key, not the comment, which GitHub does not store.
