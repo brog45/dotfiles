@@ -8,7 +8,6 @@ distro-info
 docker-ce
 docker-model-plugin
 dotnet-sdk-10.0
-drm-info
 entr
 extrepo
 ffmpeg
@@ -18,12 +17,10 @@ git-gui
 gnome-boxes
 gnome-nettool
 graphviz
-libnss3-tools
 mupdf
 npm
 pandoc
 pango1.0-tools
-planner
 plocate
 python3-pip
 python3-venv
@@ -39,4 +36,3 @@ texlive-fonts-extra
 tree
 vim-gtk3
 virt-manager
-zenmap
