@@ -4,6 +4,11 @@ set -xeu
 
 # set up Zen browser to use KeePassXC as password manager
 
+if ! flatpak info app.zen_browser.zen >/dev/null 2>&1; then
+    echo "The Zen flatpak is not installed; skipping"
+    exit 0
+fi
+
 if [ ! -x ~/.var/app/app.zen_browser.zen/.zen/native-messaging-hosts/keepassxc-proxy ]; then
     if [ ! -d ~/tmp/keepassxc-proxy-rust ]; then
         git clone https://github.com/varjolintu/keepassxc-proxy-rust ~/tmp/keepassxc-proxy-rust

@@ -5,11 +5,12 @@ set -euo pipefail
 # Make the Zen browser flatpak (installed by 070) the default web browser.
 
 app=app.zen_browser.zen.desktop
-exports=/var/lib/flatpak/exports/share
 
-if [ ! -f "$exports/applications/$app" ]; then
-    echo "No $app; is the Zen flatpak installed?" >&2
-    exit 1
+# `flatpak info` finds a system or per-user install, and fails when flatpak
+# itself is missing, as on a machine with no desktop.
+if ! flatpak info app.zen_browser.zen >/dev/null 2>&1; then
+    echo "The Zen flatpak is not installed; skipping"
+    exit 0
 fi
 
 # xdg-mime works on any desktop: it records the default in mimeapps.list (and,

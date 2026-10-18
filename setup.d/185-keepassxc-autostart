@@ -9,8 +9,8 @@ app=org.keepassxc.KeePassXC
 launcher=/var/lib/flatpak/exports/bin/$app
 
 if [ ! -x "$launcher" ]; then
-    echo "No $launcher; is the KeePassXC flatpak installed?" >&2
-    exit 1
+    echo "No $launcher (the KeePassXC flatpak is not installed); skipping"
+    exit 0
 fi
 
 # Same file name KeePassXC uses for its own "launch at system startup" entry,
