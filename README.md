@@ -112,6 +112,10 @@ machine is missing. `packages-leaves-exclude.txt` works the same way. Set
 
 ## Tests
 
+`tests/setup-test` checks `setup` itself with fake steps in a throwaway copy
+of the repo: the step list checks, progress lines and run times, the log, and
+stopping at a failed step. It needs no root and takes a few seconds.
+
 `tests/packages-leaves-docker-test` checks `update-packages-leaves` and
 the `install-packages-leaves` setup script in fresh Docker containers. It needs
 Docker access (the `docker` group) and takes about 15 minutes.

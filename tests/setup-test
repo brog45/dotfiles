@@ -1,0 +1,107 @@
+#!/usr/bin/bash
+
+# Tests for setup's own behavior, with fake steps in a throwaway copy of the
+# repo: checking setup.d/_order.txt against setup.d, the progress lines and
+# their run times, appending to the log, and stopping at a failed step.
+# Needs no root, and runs in a few seconds; you must be in the sudo group, or
+# setup would first try to add you.
+#
+# Usage: tests/setup-test
+
+set -uo pipefail
+
+repo=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+passed=0
+failed=0
+
+check() {
+    local name=$1
+    shift
+    if "$@"; then
+        passed=$((passed + 1))
+    else
+        failed=$((failed + 1))
+        printf 'FAIL: %s\n' "$name"
+        printf '  output:\n    %s\n' "${out//$'\n'/$'\n'    }"
+    fi
+}
+
+# The last run's output has, or lacks, a line matching an extended regex.
+has() { grep -qE -- "$1" <<<"$out"; }
+lacks() { ! grep -qE -- "$1" <<<"$out"; }
+
+# A step that sleeps $2 seconds, then exits with $3.
+fake_step() {
+    printf '#!/usr/bin/bash\necho "%s output"\nsleep %s\nexit %s\n' "$1" "$2" "$3" \
+        > "$work/repo/setup.d/$1"
+    chmod +x "$work/repo/setup.d/$1"
+}
+
+# The run time on step $1's progress line, in tenths of a second.
+tenths() {
+    local t
+    t=$(sed -n "s/^\[ *[0-9]*\/[0-9]*\] $1 \.\.\. [a-z]* (\([0-9.m]*\)s)\$/\1/p" <<<"$out" | tail -1)
+    [[ $t =~ ^[0-9]+\.[0-9]$ ]] || return 1
+    echo $((10#${t%.*} * 10 + 10#${t#*.}))
+}
+
+# The step's run time is within [$2, $3] tenths of a second.
+took() {
+    local t
+    t=$(tenths "$1") && [ "$t" -ge "$2" ] && [ "$t" -le "$3" ]
+}
+
+mkdir -p "$work/repo/setup.d" "$work/repo/hosts/test" "$work/home"
+cp "$repo/setup" "$work/repo/"
+cp -r "$repo/lib" "$work/repo/"
+: > "$work/repo/hosts/test/profiles.txt"
+export DOTFILES_HOST=test HOME=$work/home
+log=$work/home/dotfiles-setup.log
+
+run() {
+    out=$("$work/repo/setup" "$@" 2>&1 </dev/null)
+    rc=$?
+}
+
+# Steps that succeed and fail, slowly enough to measure.
+fake_step quick 0 0
+fake_step slow-ok 1.25 0
+fake_step slow-fail 1.25 3
+fake_step never 0 0
+printf '# test order\nquick\nslow-ok  # comment after a name\nslow-fail\nnever\n' \
+    > "$work/repo/setup.d/_order.txt"
+
+run
+check 'a failed step makes setup fail' [ "$rc" -eq 1 ]
+check 'header names the host and its profiles' has '^Host test, with no profiles$'
+check 'quick step reports ok' has '^\[ 1/4\] quick \.\.\. ok \(0\.[0-2]s\)$'
+check 'slow ok step reports its run time' took slow-ok 12 14
+check 'slow failed step reports failed' has '^\[ 3/4\] slow-fail \.\.\. failed \('
+check 'slow failed step reports its run time' took slow-fail 12 14
+check 'failure names the step and the log' has "^slow-fail failed; see $log\$"
+check 'setup stops at the failed step' lacks never
+check 'step output goes to the log' grep -qxF 'slow-ok output' "$log"
+check 'step output stays off the terminal' lacks 'slow-ok output'
+
+# Named steps run alone, in the order given, and the log keeps earlier runs.
+run slow-ok quick
+check 'named steps succeed' [ "$rc" -eq 0 ]
+check 'named steps run first in the order given' has '^\[ 1/2\] slow-ok '
+check 'named steps run second in the order given' has '^\[ 2/2\] quick '
+check 'log keeps earlier runs' [ "$(grep -c '^##### setup' "$log")" -eq 2 ]
+check 'log header names the arguments' grep -qE '^##### setup slow-ok quick at ' "$log"
+
+# The list and setup.d must agree before anything runs.
+run nope
+check 'unknown step name is refused' has '^No setup step nope in setup.d/_order.txt$'
+fake_step stray 0 0
+run
+check 'unlisted script is refused' has '^setup.d/stray is not listed in setup.d/_order.txt$'
+check 'nothing runs when the list is wrong' lacks '^\['
+rm "$work/repo/setup.d/stray"
+
+printf '%d passed, %d failed\n' "$passed" "$failed"
+[ "$failed" -eq 0 ]
