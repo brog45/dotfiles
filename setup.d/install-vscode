@@ -1,17 +1,56 @@
 #!/usr/bin/env bash
-# Install VS Code by adding Microsoft's apt repo, then installing the `code` package.
+# Install VS Code from Microsoft's apt repo.
 set -euo pipefail
 
-sudo apt install -y wget gpg
+# Once installed, the code package manages the repo itself: its postinst
+# rewrites vscode.sources (signed by microsoft.gpg) and deletes any
+# vscode.list. Set the repo up the same way, so the two never disagree; apt
+# refuses to read its sources when two entries for one repo name different
+# keys.
+sources=/etc/apt/sources.list.d/vscode.sources
+key=/usr/share/keyrings/microsoft.gpg
 
-tmp="$(mktemp)"
-trap 'rm -f "$tmp"' EXIT
+# Earlier versions of this script wrote vscode.list with their own copy of the
+# key, which conflicts with the package's entry.
+old_list=/etc/apt/sources.list.d/vscode.list
+old_key=/usr/share/keyrings/packages.microsoft.gpg
+if [ -f "$old_list" ] && grep -qF "$old_key" "$old_list"; then
+    echo "Removing $old_list, written by an earlier version of this script"
+    sudo rm -f "$old_list"
+fi
+if [ -f "$old_key" ]; then
+    sudo rm -f "$old_key"
+fi
 
-wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > "$tmp"
-sudo install -D -o root -g root -m 644 "$tmp" /usr/share/keyrings/packages.microsoft.gpg
-arch="$(dpkg --print-architecture)"
-echo "deb [arch=${arch} signed-by=/usr/share/keyrings/packages.microsoft.gpg] https://packages.microsoft.com/repos/code stable main" \
-  | sudo tee /etc/apt/sources.list.d/vscode.list > /dev/null
+# Any entry for the repo will do, in either format.
+if grep -Eqs -e '^[[:space:]]*deb[[:space:]].*https://packages\.microsoft\.com/repos/code/?([[:space:]]|$)' \
+    -e '^[[:space:]]*URIs:[[:space:]]*https://packages\.microsoft\.com/repos/code/?([[:space:]]|$)' \
+    /etc/apt/sources.list /etc/apt/sources.list.d/*; then
+    added=0
+else
+    sudo apt-get install -y wget gpg
 
-sudo apt update
-sudo apt install -y code
+    tmp="$(mktemp)"
+    trap 'rm -f "$tmp"' EXIT
+    wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > "$tmp"
+    sudo install -D -o root -g root -m 644 "$tmp" "$key"
+
+    sudo tee "$sources" > /dev/null <<EOF
+Types: deb
+URIs: https://packages.microsoft.com/repos/code
+Suites: stable
+Components: main
+Architectures: $(dpkg --print-architecture)
+Signed-By: $key
+EOF
+    added=1
+fi
+
+if dpkg-query -W -f '${db:Status-Status}' code 2>/dev/null | grep -qx installed; then
+    echo "VS Code is already installed"
+else
+    if [ "$added" -eq 1 ]; then
+        sudo apt-get update
+    fi
+    sudo apt-get install -y code
+fi
