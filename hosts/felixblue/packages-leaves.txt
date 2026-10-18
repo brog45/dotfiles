@@ -1,6 +1,5 @@
 asunder
 claude-desktop
-keepassxc
 kernelstub
 language-pack-gnome-en
 miller

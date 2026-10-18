@@ -1,8 +1,1 @@
-com.github.PintaProject.Pinta
-com.github.unrud.VideoDownloader
 com.mattjakeman.ExtensionManager
-org.chromium.Chromium
-org.gnome.DejaDup
-org.keepassxc.KeePassXC
-org.libreoffice.LibreOffice
-org.remmina.Remmina

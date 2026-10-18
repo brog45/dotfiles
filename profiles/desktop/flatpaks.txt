@@ -3,4 +3,5 @@ com.github.maoschanz.drawing
 com.github.tchx84.Flatseal
 io.github.halfmexican.Mingle
 it.mijorus.smile
+org.keepassxc.KeePassXC
 org.signal.Signal
