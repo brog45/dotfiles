@@ -1,0 +1,20 @@
+# shellcheck shell=bash
+# Sourced by the setup.d scripts that only make sense on a machine with a
+# desktop environment, such as installing flatpaks. The sourcing script must
+# set repo_root.
+
+# Succeed if any X11 or Wayland session is installed: the sessions a login
+# screen offers. GNOME, KDE, COSMIC, Xfce and the rest each install one.
+has_desktop() {
+    compgen -G '/usr/share/xsessions/*.desktop' >/dev/null ||
+        compgen -G '/usr/share/wayland-sessions/*.desktop' >/dev/null
+}
+
+# Exit the sourcing script, successfully, when there is no desktop.
+#   require_desktop "installing flatpaks"
+require_desktop() {
+    if ! has_desktop; then
+        echo "No desktop environment; skipping $1"
+        exit 0
+    fi
+}
