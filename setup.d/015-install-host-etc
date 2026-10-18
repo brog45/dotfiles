@@ -20,12 +20,21 @@ if [ ! -d "$src" ]; then
     exit 0
 fi
 
-find "$src" -type f -print0 | sort -z | while IFS= read -r -d '' file; do
+udev_changed=0
+while IFS= read -r -d '' file; do
     dest=/etc/${file#"$src"/}
     if cmp -s "$file" "$dest"; then
         echo "$dest is up to date"
     else
         echo "Installing $dest"
         sudo install -D -m 644 "$file" "$dest"
+        [[ $dest == /etc/udev/rules.d/* ]] && udev_changed=1
     fi
-done
+done < <(find "$src" -type f -print0 | sort -z)
+
+# Apply new udev rules now rather than at the next boot.
+if [ $udev_changed -eq 1 ]; then
+    echo "Reloading udev rules"
+    sudo udevadm control --reload
+    sudo udevadm trigger
+fi
