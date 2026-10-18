@@ -10,6 +10,22 @@ repo_root=$(dirname "$script_dir")
 
 # The shared vscode-extensions.txt plus this host's profiles' and its own
 # hosts/<host>/vscode-extensions.txt.
-wanted_list vscode-extensions.txt |
-    xargs -r -L1 code --install-extension
+mapfile -t wanted < <(wanted_list vscode-extensions.txt)
+
+# Each code call takes a moment to start, so list what is installed once and
+# install only what is missing, all in one call. Extension IDs are not case
+# sensitive, and --list-extensions may not match the list's case.
+installed=$(code --list-extensions | tr '[:upper:]' '[:lower:]')
+args=()
+for ext in ${wanted[@]+"${wanted[@]}"}; do
+    if ! grep -qxF "${ext,,}" <<<"$installed"; then
+        args+=(--install-extension "$ext")
+    fi
+done
+
+if [ ${#args[@]} -eq 0 ]; then
+    echo "All ${#wanted[@]} VS Code extensions are already installed"
+else
+    code "${args[@]}"
+fi
 
