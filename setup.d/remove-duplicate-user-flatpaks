@@ -1,0 +1,94 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Remove per-user flatpaks that duplicate a system-wide install (from
+# install-flatpaks), so only one copy needs updating: apps of the same version
+# with the same effective permissions, then runtimes and extensions of the same
+# version. With -n, only show what would be removed.
+#
+# Nothing is lost by removing the user copy. App data in ~/.var/app/<app> is
+# shared by both installs, and uninstalling without --delete-data keeps it.
+# User overrides (flatpak override --user) apply to system installs too, and
+# runtimes and extensions are looked up in the user installation first and then
+# the system one, whichever installation the app is in.
+#
+# This does not run `flatpak uninstall --user --unused`: it counts only user
+# apps, so it would remove user extensions (such as GTK themes) that system
+# apps use and have no system copy of.
+
+dry_run=0
+if [ "${1:-}" = -n ]; then
+    dry_run=1
+fi
+
+if ! command -v flatpak >/dev/null; then
+    echo "flatpak is not installed; skipping"
+    exit 0
+fi
+
+# Effective permissions: the app's metadata merged with its overrides. A
+# system install gets system overrides on top of the user ones, so this is
+# where the two installs can differ.
+permissions() {
+    flatpak info "--$1" --show-permissions "$2"
+}
+
+# Version goes last: it can be empty, and read would merge empty tab-separated
+# fields in the middle. --all includes the Locale extensions.
+list() {
+    flatpak list "--$1" "--$2" --all --columns=ref,active,version
+}
+
+# Print the user refs of kind $1 (app or runtime) that duplicate a system ref,
+# and say why each other shared ref is kept.
+duplicates() {
+    local kind=$1 ref commit version line s_ref s_commit s_version found
+    local -a system
+    mapfile -t system < <(list system "$kind")
+    while IFS=$'\t' read -r ref commit version; do
+        found=0
+        for line in "${system[@]}"; do
+            IFS=$'\t' read -r s_ref s_commit s_version <<<"$line"
+            if [ "$s_ref" = "$ref" ]; then
+                found=1
+                break
+            fi
+        done
+        [ "$found" -eq 1 ] || continue
+
+        # Without a version on either side, only the same commit counts as the
+        # same version.
+        if [ -n "$version" ] || [ -n "$s_version" ]; then
+            if [ "$version" != "$s_version" ]; then
+                echo "Keeping user $ref: version ${version:-none} here, ${s_version:-none} system-wide" >&2
+                continue
+            fi
+        elif [ "$commit" != "$s_commit" ]; then
+            echo "Keeping user $ref: commit $commit here, $s_commit system-wide" >&2
+            continue
+        fi
+
+        if [ "$kind" = app ] && [ "$(permissions user "$ref")" != "$(permissions system "$ref")" ]; then
+            echo "Keeping user $ref: its permissions differ from the system-wide install's" >&2
+            diff <(permissions system "$ref") <(permissions user "$ref") | sed 's/^/    /' >&2 || true
+            continue
+        fi
+
+        echo "$ref"
+    done < <(list user "$kind")
+}
+
+# Apps first: removing a user app also removes its own extensions, such as its
+# Locale, so they are not listed again below.
+for kind in app runtime; do
+    mapfile -t refs < <(duplicates "$kind")
+    if [ ${#refs[@]} -eq 0 ]; then
+        echo "No user ${kind}s duplicate a system-wide install"
+    elif [ "$dry_run" -eq 1 ]; then
+        printf 'Would remove user %s, a duplicate of the system-wide install\n' "${refs[@]}"
+    else
+        printf 'Removing user %s, a duplicate of the system-wide install\n' "${refs[@]}"
+        flatpak uninstall --user -y --noninteractive "${refs[@]}"
+    fi
+done

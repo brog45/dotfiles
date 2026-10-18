@@ -10,6 +10,7 @@ install-firacode-nerd-font
 install-packages-leaves
 docker-group
 install-flatpaks
+remove-duplicate-user-flatpaks
 default-browser
 ssh-key
 github-ssh-key
