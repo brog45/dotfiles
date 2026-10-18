@@ -4,10 +4,22 @@ set -euo pipefail
 
 # Authorize the SSH key from ssh-key on jeeves.lan. ssh-copy-id logs in with
 # your password once and appends the public key to ~/.ssh/authorized_keys
-# there; it skips the key if jeeves already accepts it.
+# there. Does nothing on jeeves itself, or if jeeves already accepts the key.
 
 host=jeeves.lan
 key=~/.ssh/id_ed25519
+
+if [ "$(hostname -s)" = jeeves ]; then
+    echo "This is jeeves; no key to authorize"
+    exit 0
+fi
+
+# Offer only this key, and never ask for a password, so this passes only if
+# jeeves accepts the key.
+if ssh -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=5 -i "$key" "$host" true 2>/dev/null; then
+    echo "$host already accepts $key"
+    exit 0
+fi
 
 if [ ! -f "$key.pub" ]; then
     echo "No SSH key $key.pub; run ssh-key first" >&2
