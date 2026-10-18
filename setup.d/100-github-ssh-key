@@ -3,14 +3,42 @@
 set -euo pipefail
 
 # Add the SSH key from 090 to your GitHub account, so git can use
-# git@github.com:... remotes. Signs in to GitHub with the gh CLI, which opens
-# the browser (made the default by 080) to approve the login.
+# git@github.com:... remotes. If SSH to GitHub already works with the key, does
+# nothing more; otherwise signs in to GitHub with the gh CLI, which opens the
+# browser (made the default by 080) to approve the login.
 
 key=~/.ssh/id_ed25519
 
 if [ ! -f "$key.pub" ]; then
     echo "No SSH key $key.pub; run 090-ssh-key first" >&2
     exit 1
+fi
+
+for cmd in curl jq; do
+    if ! command -v "$cmd" >/dev/null; then
+        sudo apt install -y "$cmd"
+    fi
+done
+
+# Trust GitHub's host keys as published by its API (fetched over HTTPS), rather
+# than accepting whatever key answers on first connection. The endpoint is
+# public, so this needs no login.
+if ! ssh-keygen -F github.com >/dev/null; then
+    curl -fsSL https://api.github.com/meta | jq -r '.ssh_keys[]' | sed 's/^/github.com /' >> ~/.ssh/known_hosts
+fi
+
+# GitHub answers with a greeting and exit status 1, since it gives no shell,
+# so check the greeting rather than the exit status. Offer only this key, so
+# another key in the agent cannot make it pass.
+ssh_works() {
+    local greeting
+    greeting=$(ssh -T -o BatchMode=yes -o IdentitiesOnly=yes -i "$key" git@github.com 2>&1 || true)
+    [[ $greeting == *'successfully authenticated'* ]]
+}
+
+if ssh_works; then
+    echo "SSH to GitHub already works with $key"
+    exit 0
 fi
 
 if ! command -v gh >/dev/null; then
@@ -35,16 +63,7 @@ else
     gh ssh-key add "$key.pub" --title "$(hostname)"
 fi
 
-# Trust GitHub's host keys as published by its API (fetched over HTTPS), rather
-# than accepting whatever key answers on first connection.
-if ! ssh-keygen -F github.com >/dev/null; then
-    gh api meta --jq '.ssh_keys[]' | sed 's/^/github.com /' >> ~/.ssh/known_hosts
-fi
-
-# GitHub answers with a greeting and exit status 1, since it gives no shell,
-# so check the greeting rather than the exit status.
-greeting=$(ssh -T git@github.com 2>&1 || true)
-if [[ $greeting == *'successfully authenticated'* ]]; then
+if ssh_works; then
     echo "SSH to GitHub works"
 else
     echo "Could not authenticate to GitHub over SSH" >&2
