@@ -11,6 +11,14 @@ if [[ -n "$TARGET" ]] && [[ ! "$TARGET" =~ ^(stable|latest|[0-9]+\.[0-9]+\.[0-9]
     exit 1
 fi
 
+# Already installed: the native install updates itself, so there is nothing to
+# do unless a version was asked for. Check the launcher's path rather than
+# PATH, which may not include ~/.local/bin yet.
+if [[ -z "$TARGET" ]] && version=$("$HOME/.local/bin/claude" --version 2>/dev/null); then
+    echo "Claude Code is already installed: $version"
+    exit 0
+fi
+
 # Refuse to run under sudo from a regular user's shell. This installer puts
 # everything under $HOME, which under sudo typically resolves to root's home:
 # the binary lands in /root/.local/bin (or is left root-owned in the user's
