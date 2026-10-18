@@ -1,4 +1,4 @@
-# VS Code extensions to install on every host. Edited by hand:
+# VS Code extensions for every host with the desktop profile. Edited by hand:
 # update-vscode-extensions writes only hosts/<host>/vscode-extensions.txt. See
 # lib/host-lists.
 

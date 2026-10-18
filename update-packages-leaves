@@ -54,8 +54,8 @@
 # fresh machine already has them. They stay in the dependency graph, so
 # anything they require is not listed either.
 #
-# Packages named in packages-leaves-exclude.txt, or in this host's
-# hosts/<host>/packages-leaves-exclude.txt, are never listed, and are taken
+# Packages named in packages-leaves-exclude.txt, or in the same file in one
+# of this host's profiles or in hosts/<host>/, are never listed, and are taken
 # out of the graph the same way. Entries are shell-style globs (*, ?,
 # [...]), matched against the whole package name, so a plain name still
 # matches only itself.

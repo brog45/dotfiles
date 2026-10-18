@@ -1,7 +1,8 @@
 #!/usr/bin/bash
 
-# Install every package listed in packages-leaves.txt, the shared list, or in
-# this host's hosts/<host>/packages-leaves.txt (see lib/host-lists) that is
+# Install every package listed in packages-leaves.txt, the shared list, in
+# this host's profiles' or its own hosts/<host>/packages-leaves.txt (see
+# lib/host-lists) that is
 # not already installed on this machine. Installs only; never removes anything. apt is
 # run with --no-remove, so a package that could only be installed by removing
 # something already present is reported as a warning and skipped rather than
@@ -246,7 +247,22 @@ if [[ -n $list_file ]]; then
     list_name=$list_file
 else
     wanted_list packages-leaves.txt > "$wanted"
-    list_name="packages-leaves.txt and ${host_dir#"$repo_root"/}/packages-leaves.txt"
+    # Name the lists that exist, e.g. "packages-leaves.txt,
+    # profiles/desktop/packages-leaves.txt and hosts/larry/packages-leaves.txt".
+    names=()
+    for dir in "${list_dirs[@]}"; do
+        if [[ -f $dir/packages-leaves.txt ]]; then
+            rel=${dir#"$repo_root"}
+            rel=${rel#/}
+            names+=("${rel:+$rel/}packages-leaves.txt")
+        fi
+    done
+    case ${#names[@]} in
+        0) list_name=packages-leaves.txt ;;
+        1) list_name=${names[0]} ;;
+        *) printf -v list_name '%s, ' "${names[@]:0:${#names[@]}-1}"
+           list_name="${list_name%, } and ${names[-1]}" ;;
+    esac
 fi
 
 mapfile -t missing < <(comm -23 "$wanted" "$installed")

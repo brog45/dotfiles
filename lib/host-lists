@@ -1,17 +1,20 @@
 # shellcheck shell=bash
-# Shared and per-host lists, sourced by the update-* scripts and the setup.d
-# scripts that install from them. The sourcing script must set repo_root.
+# Shared, per-profile and per-host lists, sourced by the update-* scripts and
+# the setup.d scripts that install from them. The sourcing script must set
+# repo_root.
 #
 # Each kind of list (packages-leaves.txt, flatpaks.txt, vscode-extensions.txt,
 # alternatives.txt, packages-leaves-exclude.txt) has a shared file at the repo
-# root, used on every machine, and may have a file of the same name in
-# hosts/<host>/, used only on that host. The host is the short hostname, or
+# root, used on every machine. A file of the same name may also be in
+# profiles/<profile>/, used on every host that builds on that profile, and in
+# hosts/<host>/, used only on that host. hosts/<host>/profiles.txt names the
+# host's profiles, one per line. The host is the short hostname, or
 # $DOTFILES_HOST when set.
 #
 # The update-* scripts write only the host file: whatever this machine has
-# that the shared file does not. They never change a shared file; moving an
-# entry there is done by hand, and they point out entries that another host
-# lists too, which are the likely candidates.
+# that the shared file and its profiles do not. They never change a shared or
+# profile file; moving an entry there is done by hand, and they point out
+# entries that another host lists too, which are the likely candidates.
 #
 # Needs only bash, coreutils, sed and hostname, so it works on a bare machine.
 
@@ -26,29 +29,67 @@ read_list() {
     sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$1" | sed '/^$/d'
 }
 
-# Print the shared and this host's entries of a list, sorted and deduplicated.
-#   wanted_list flatpaks.txt
-wanted_list() {
-    { read_list "$repo_root/$1"; read_list "$host_dir/$1"; } | LC_ALL=C sort -u
+# This host's profiles, in the order profiles.txt lists them. A name with no
+# profiles/<name>/ directory is a typo, so stop rather than skip it quietly.
+mapfile -t profiles < <(read_list "$host_dir/profiles.txt")
+profile_dirs=()
+for profile in ${profiles[@]+"${profiles[@]}"}; do
+    if [[ ! -d $repo_root/profiles/$profile ]]; then
+        printf '%s/profiles.txt: no such profile: %s\n' "${host_dir#"$repo_root"/}" "$profile" >&2
+        return 1
+    fi
+    profile_dirs+=("$repo_root/profiles/$profile")
+done
+unset profile
+
+# Every directory a list or etc/ tree can come from, in order of precedence:
+# the repo root, this host's profiles, then the host itself, so later entries
+# win where order matters (alternatives, files under etc/).
+list_dirs=("$repo_root" ${profile_dirs[@]+"${profile_dirs[@]}"} "$host_dir")
+
+# Print a list's entries from every directory in list_dirs, in that order.
+#   read_lists alternatives.txt
+read_lists() {
+    local dir
+    for dir in "${list_dirs[@]}"; do
+        read_list "$dir/$1"
+    done
 }
 
-# Print the shared entries of a list missing from stdin, e.g. shared flatpaks
-# that are not installed here.
+# Print the shared, profile and host entries of a list, sorted and
+# deduplicated.
+#   wanted_list flatpaks.txt
+wanted_list() {
+    read_lists "$1" | LC_ALL=C sort -u
+}
+
+# Print the entries of a list that this host gets from elsewhere than its own
+# host file -- the repo root and its profiles -- sorted and deduplicated.
+shared_list() {
+    local dir
+    for dir in "$repo_root" ${profile_dirs[@]+"${profile_dirs[@]}"}; do
+        read_list "$dir/$1"
+    done | LC_ALL=C sort -u
+}
+
+# Print the shared and profile entries of a list missing from stdin, e.g.
+# shared flatpaks that are not installed here.
 #   flatpak list --columns=app --app | missing_shared flatpaks.txt
 missing_shared() {
-    LC_ALL=C comm -23 <(read_list "$repo_root/$1" | LC_ALL=C sort -u) <(LC_ALL=C sort -u)
+    LC_ALL=C comm -23 <(shared_list "$1") <(LC_ALL=C sort -u)
 }
 
 # Write hosts/<host>/NAME from this machine's full list on stdin, leaving out
-# entries already in the shared NAME.
+# entries already in the shared NAME or this host's profiles' NAME.
 #   flatpak list --columns=app --app | write_host_list flatpaks.txt
 write_host_list() {
     local name=$1 out=$host_dir/$1 entries other common
-    entries=$(LC_ALL=C comm -23 <(LC_ALL=C sort -u | sed '/^$/d') <(read_list "$repo_root/$name" | LC_ALL=C sort -u))
+    entries=$(LC_ALL=C comm -23 <(LC_ALL=C sort -u | sed '/^$/d') <(shared_list "$name"))
     if [[ -z $entries ]]; then
-        # Nothing beyond the shared list: no file, rather than an empty one.
+        # Nothing beyond the shared and profile lists: no file, rather than
+        # an empty one.
         rm -f "$out"
-        printf '%s: nothing beyond the shared %s\n' "${out#"$repo_root"/}" "$name"
+        printf '%s: nothing beyond the shared and profile %s\n' "${out#"$repo_root"/}" "$name"
         return
     fi
     mkdir -p "$host_dir"
@@ -59,7 +100,7 @@ write_host_list() {
         [[ -f $other && $other != "$out" ]] || continue
         common=$(LC_ALL=C comm -12 "$out" <(read_list "$other" | LC_ALL=C sort -u) | tr '\n' ' ')
         if [[ -n $common ]]; then
-            printf 'also listed for %s (move them to %s if every host should have them): %s\n' \
+            printf 'also listed for %s (move them to %s or a profile both hosts use): %s\n' \
                 "$(basename "$(dirname "$other")")" "$name" "${common% }" >&2
         fi
     done

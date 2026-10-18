@@ -2,8 +2,8 @@
 
 set -euo pipefail
 
-# Save this host's flatpaks that the shared flatpaks.txt does not list to
-# hosts/<host>/flatpaks.txt (see lib/host-lists).
+# Save this host's flatpaks that neither the shared flatpaks.txt nor its
+# profiles list to hosts/<host>/flatpaks.txt (see lib/host-lists).
 
 repo_root=$(dirname "$(readlink -f "$0")")
 # shellcheck source=lib/host-lists

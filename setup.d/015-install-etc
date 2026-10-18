@@ -1,0 +1,50 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Copy system config into /etc at the same paths: etc/ at the repo root, in
+# each of this host's profiles, and in hosts/<host>/ (see lib/host-lists).
+# Where two of them have the same file, the later one wins, so a host can
+# override its profiles. Only files that differ are written, so rerunning is
+# a no-op; files in /etc that the repo does not mention are left alone.
+#
+# Prefer drop-in directories such as /etc/systemd/logind.conf.d/ over
+# replacing a package's own config file, so package upgrades never conflict.
+
+script=$(readlink -f "$0")
+repo_root=$(dirname "$(dirname "$script")")
+# shellcheck source=lib/host-lists
+. "$repo_root/lib/host-lists"
+
+# Map each /etc path to the file that wins it.
+declare -A source_of=()
+for dir in "${list_dirs[@]}"; do
+    [ -d "$dir/etc" ] || continue
+    while IFS= read -r -d '' file; do
+        source_of[/etc/${file#"$dir"/etc/}]=$file
+    done < <(find "$dir/etc" -type f -print0)
+done
+
+if [ ${#source_of[@]} -eq 0 ]; then
+    echo "No etc/ files for $host; nothing to install into /etc"
+    exit 0
+fi
+
+udev_changed=0
+while IFS= read -r -d '' dest; do
+    file=${source_of[$dest]}
+    if cmp -s "$file" "$dest"; then
+        echo "$dest is up to date"
+    else
+        echo "Installing $dest from ${file#"$repo_root"/}"
+        sudo install -D -m 644 "$file" "$dest"
+        [[ $dest == /etc/udev/rules.d/* ]] && udev_changed=1
+    fi
+done < <(printf '%s\0' "${!source_of[@]}" | sort -z)
+
+# Apply new udev rules now rather than at the next boot.
+if [ $udev_changed -eq 1 ]; then
+    echo "Reloading udev rules"
+    sudo udevadm control --reload
+    sudo udevadm trigger
+fi

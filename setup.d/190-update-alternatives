@@ -2,9 +2,10 @@
 
 set -euo pipefail
 
-# Restore the alternatives listed in the shared alternatives.txt and this
-# host's hosts/<host>/alternatives.txt (saved by update-alternatives-list).
-# The host file is applied last, so its choices win.
+# Restore the alternatives listed in the shared alternatives.txt, this host's
+# profiles' and its own hosts/<host>/alternatives.txt (saved by
+# update-alternatives-list). They are applied in that order, so a profile's
+# choices override the shared ones and the host's override both.
 
 script=$(readlink -f "$0")
 script_dir=$(dirname "$script")
@@ -23,5 +24,4 @@ if [ -x "$zen" ]; then
     done
 fi
 
-{ read_list "$repo_root/alternatives.txt"; read_list "$host_dir/alternatives.txt"; } |
-    sudo update-alternatives --set-selections
+read_lists alternatives.txt | sudo update-alternatives --set-selections

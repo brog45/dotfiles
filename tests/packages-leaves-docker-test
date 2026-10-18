@@ -152,6 +152,24 @@ out=$(./setup.d/050-install-packages-leaves 2>&1); rc=$?
 check 'no host file: shared list alone' '[[ $rc -eq 0 ]] && grep -q "all 2 packages" <<<"$out"'
 EOF
 
+scenario 'profiles: the host profiles add to the lists, others do not' <<'EOF'
+mkdir -p hosts/test profiles/p profiles/unused
+printf 'bash\n' > packages-leaves.txt
+printf 'coreutils\n' > profiles/p/packages-leaves.txt
+printf 'not-a-real-package-xyz\n' > profiles/unused/packages-leaves.txt
+printf 'sed\n' > hosts/test/packages-leaves.txt
+printf 'p  # comment\n\n' > hosts/test/profiles.txt
+out=$(./setup.d/050-install-packages-leaves 2>&1); rc=$?
+echo "$out" | sed 's/^/    | /'
+check 'exit status 0 (unused profile ignored)' '[[ $rc -eq 0 ]]'
+check 'reports the 3 packages'          'grep -q "all 3 packages" <<<"$out"'
+check 'names all three lists'           'grep -q "packages-leaves.txt, profiles/p/packages-leaves.txt and hosts/test/packages-leaves.txt" <<<"$out"'
+printf 'p\nnope\n' > hosts/test/profiles.txt
+out=$(./setup.d/050-install-packages-leaves 2>&1); rc=$?
+echo "$out" | sed 's/^/    | /'
+check 'unknown profile is an error'     '[[ $rc -ne 0 ]] && grep -q "no such profile: nope" <<<"$out"'
+EOF
+
 scenario 'help and option handling under mawk' <<'EOF'
 out=$(./setup.d/050-install-packages-leaves -h 2>&1); rc=$?
 check '-h exits 0'                      '[[ $rc -eq 0 ]]'
@@ -238,7 +256,7 @@ EOF
 
 scenario 'generator: no-repo packages warned, exclusions and globs honoured' <<'EOF'
 apt-get update -qq
-apt-get install -y -qq python3 tree cowsay htop jq figlet >/dev/null 2>&1
+apt-get install -y -qq python3 tree cowsay htop jq figlet cmatrix >/dev/null 2>&1
 # An exact name, a glob (bracket class and star), a glob that matches nothing,
 # and a bare prefix: patterns match the whole name, so `tre` must not take tree.
 cat > packages-leaves-exclude.txt <<'EXCLUDE'
@@ -253,6 +271,11 @@ printf 'jq\n' > hosts/test/packages-leaves-exclude.txt
 # figlet is in the shared list, so it does not belong in the host list; sl is
 # shared but not installed here, which is reported.
 printf 'figlet\nsl\n' > packages-leaves.txt
+# cmatrix comes from a profile this host builds on, so it does not belong in
+# the host list either.
+mkdir -p profiles/p
+printf 'cmatrix\n' > profiles/p/packages-leaves.txt
+printf 'p\n' > hosts/test/profiles.txt
 # Another host lists tree too, which is pointed out as a candidate for sharing.
 printf 'tree\nnot-installed-here\n' > hosts/other/packages-leaves.txt
 # Pop!_OS pins its whole origin at 1001, which widens the priority column on
@@ -290,6 +313,8 @@ check 'glob-excluded htop not listed'   '! grep -qx htop $list'
 check 'host-excluded jq not listed'     '! grep -qx jq $list'
 check 'exclusion is reported'           'grep -q "^excluded per packages-leaves-exclude.txt: cowsay htop jq$" <<<"$out"'
 check 'shared figlet left out of the host list' '! grep -qx figlet $list'
+check 'cmatrix is installed, so leaving it out means something' 'dpkg -s cmatrix >/dev/null 2>&1'
+check 'profile cmatrix left out of the host list' '! grep -qx cmatrix $list'
 check 'shared sl reported as not installed' 'grep -q "^shared packages not installed here.*: sl$" <<<"$out"'
 check 'tree pointed out as listed for other' 'grep -q "^also listed for other .*: tree$" <<<"$out"'
 EOF

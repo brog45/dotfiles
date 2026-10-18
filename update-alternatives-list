@@ -2,10 +2,11 @@
 
 set -euo pipefail
 
-# Save the alternatives you chose by hand that the shared alternatives.txt
-# does not already set to hosts/<host>/alternatives.txt (see lib/host-lists).
-# Automatic ones are left out, so a new machine makes its own choices for
-# those. A host line overrides a shared line for the same name, since
+# Save the alternatives you chose by hand that neither the shared
+# alternatives.txt nor this host's profiles already set to
+# hosts/<host>/alternatives.txt (see lib/host-lists). Automatic ones are left
+# out, so a new machine makes its own choices for those. A host line
+# overrides a shared or profile line for the same name, since
 # setup.d/190-update-alternatives applies the host file last.
 
 repo_root=$(dirname "$(readlink -f "$0")")

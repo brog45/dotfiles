@@ -42,24 +42,39 @@ stow -vv --no-folding -t ~ <package-name>
 
 `--no-folding` creates real directories in `$HOME` and links only the files.
 
+## Profiles
+
+A profile is a set of lists and config that several machines share, such as
+`desktop`. Each lives in `profiles/<profile>/` and may hold any of
+`packages-leaves.txt`, `packages-leaves-exclude.txt`, `flatpaks.txt`,
+`alternatives.txt`, `vscode-extensions.txt` and an `etc/` tree.
+
+A machine builds on the profiles named in `hosts/<hostname>/profiles.txt`, one
+per line. A name with no `profiles/` directory is an error, not skipped.
+
 ## System config
 
-Files under `hosts/<hostname>/etc/` are copied into `/etc` at the same paths
-by `setup.d/015-install-host-etc`, on that host only. Use drop-in directories
-such as `/etc/systemd/logind.conf.d/` rather than replacing a package's own
-config file.
+Files under `etc/` in a host's profiles and in `hosts/<hostname>/` are copied
+into `/etc` at the same paths by `setup.d/015-install-etc`. Where both have
+the same file, the host's wins. Use drop-in directories such as
+`/etc/systemd/logind.conf.d/` rather than replacing a package's own config
+file.
 
 ## Updating the lists
 
-Each list `setup` installs from comes in two parts:
+Each list `setup` installs from comes in up to three parts:
 
 - a shared file at the repo root, such as `packages-leaves.txt`, installed on
   every machine and edited by hand;
+- a file of the same name in each of the machine's profiles, also edited by
+  hand;
 - an optional file of the same name in `hosts/<hostname>/`, installed only on
   that machine.
 
-`setup` installs both. After installing or removing software, regenerate this
-machine's host files:
+`setup` installs all of them. For `alternatives.txt` the order matters: a
+profile's choices override the shared file's, and the host's override both.
+
+After installing or removing software, regenerate this machine's host files:
 
 ```bash
 ./update-packages-leaves     # apt packages you chose to install
@@ -69,11 +84,11 @@ machine's host files:
 ```
 
 Each writes only `hosts/<hostname>/`: what this machine has beyond the shared
-file. To give every machine something, move its line into the shared file. The
-scripts point out entries another host lists too, and shared entries this
-machine is missing. `packages-leaves-exclude.txt` works the same way: the
-shared file applies everywhere, `hosts/<hostname>/packages-leaves-exclude.txt`
-only there. Set `DOTFILES_HOST` to use another name than `hostname -s`.
+file and its profiles. To give several machines something, move its line into
+a profile they share, or into the shared file for every machine. The scripts
+point out entries another host lists too, and shared or profile entries this
+machine is missing. `packages-leaves-exclude.txt` works the same way. Set
+`DOTFILES_HOST` to use another name than `hostname -s`.
 
 ## Tests
 

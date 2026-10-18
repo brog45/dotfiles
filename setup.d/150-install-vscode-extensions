@@ -8,7 +8,7 @@ repo_root=$(dirname "$script_dir")
 # shellcheck source=lib/host-lists
 . "$repo_root/lib/host-lists"
 
-# The shared vscode-extensions.txt plus this host's
+# The shared vscode-extensions.txt plus this host's profiles' and its own
 # hosts/<host>/vscode-extensions.txt.
 wanted_list vscode-extensions.txt |
     xargs -r -L1 code --install-extension

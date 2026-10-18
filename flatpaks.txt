@@ -1,9 +1,4 @@
-# Flatpaks to install on every host. Edited by hand: update-flatpaks-list writes
+# Flatpaks to install on every host with a desktop; most belong in a
+# profile's flatpaks.txt instead. Edited by hand: update-flatpaks-list writes
 # only hosts/<host>/flatpaks.txt. See lib/host-lists.
 
-app.zen_browser.zen
-com.github.maoschanz.drawing
-com.github.tchx84.Flatseal
-io.github.halfmexican.Mingle
-it.mijorus.smile
-org.signal.Signal

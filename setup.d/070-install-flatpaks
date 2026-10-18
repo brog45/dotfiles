@@ -25,7 +25,8 @@ fi
 
 flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 
-# The shared flatpaks.txt plus this host's hosts/<host>/flatpaks.txt.
+# The shared flatpaks.txt plus this host's profiles' and its own
+# hosts/<host>/flatpaks.txt.
 mapfile -t flatpaks < <(wanted_list flatpaks.txt)
 if [ ${#flatpaks[@]} -gt 0 ]; then
     sudo flatpak install --system -y "${flatpaks[@]}"
