@@ -42,6 +42,13 @@ stow -vv --no-folding -t ~ <package-name>
 
 `--no-folding` creates real directories in `$HOME` and links only the files.
 
+## System config
+
+Files under `hosts/<hostname>/etc/` are copied into `/etc` at the same paths
+by `setup.d/015-install-host-etc`, on that host only. Use drop-in directories
+such as `/etc/systemd/logind.conf.d/` rather than replacing a package's own
+config file.
+
 ## Updating the lists
 
 Each list `setup` installs from comes in two parts:
