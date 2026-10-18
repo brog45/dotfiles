@@ -4,8 +4,6 @@ calibre
 cmake
 code
 cpufrequtils
-diffpdf
-distro-info
 docker-ce
 docker-model-plugin
 dotnet-sdk-10.0
@@ -40,7 +38,6 @@ python3-venv
 qprint
 remmina
 ripgrep
-rsyslog
 rustup
 sessioninstaller
 shellcheck
