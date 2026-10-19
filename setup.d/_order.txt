@@ -2,10 +2,12 @@
 # script in setup.d must be listed, and every name must be an executable
 # script there. Comments (# to end of line) and blank lines are ignored.
 
+# Run install-stow first, so that a step failing later cannot leave your
+# dotfile links broken after a pull that moved files between stow/ trees.
+install-stow
 remove-and-block-packages
 install-etc
 apt-update
-install-stow
 install-firacode-nerd-font
 install-packages-leaves
 docker-group

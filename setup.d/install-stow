@@ -11,7 +11,10 @@ repo_root=$(dirname "$(dirname "$(readlink -f "$0")")")
 # shellcheck source=lib/host-lists
 . "$repo_root/lib/host-lists"
 
+# This is the first step, so on a fresh install apt's package lists may be as
+# old as the install media; update them before installing.
 if ! command -v stow >/dev/null; then
+    sudo apt-get update
     sudo apt-get install -y stow
 fi
 
