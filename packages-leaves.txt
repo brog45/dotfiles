@@ -7,5 +7,6 @@ byobu
 curl
 gh
 htop
+miller
 stow
 vim-nox
