@@ -8,8 +8,9 @@
 # something already present is reported as a warning and skipped rather than
 # quietly taking the other package with it.
 #
-# Usage: install-packages-leaves [-y] [-h] [-r repos-file] [list-file]
-#   -y             skip the confirmation prompts
+# Usage: install-packages-leaves [-i] [-h] [-r repos-file] [list-file]
+#   -i             interactive: ask before enabling repositories and before
+#                  installing
 #   -h             show this help
 #   -r repos-file  read vendor repositories from this file instead of
 #                  packages-leaves-repos.txt
@@ -24,9 +25,10 @@
 # policy is not enabled; when that happens the contrib policy, and if that is
 # not enough the non-free policy too, is added to /etc/extrepo/config.yaml.
 #
-# The package transaction is simulated first (apt-get -s), so the prompt
-# shows the real total including dependencies. Once you answer y, apt-get
-# runs with -y rather than asking again.
+# The package transaction is simulated first (apt-get -s), so the summary
+# (and, with -i, the prompt) shows the real total including dependencies.
+# apt-get always runs with -y: with -i you have already answered y, so it
+# does not ask again.
 #
 # Packages that cannot be installed -- no configured repository has them
 # (Pop!_OS-only packages on Debian, warp-terminal without its repository), or
@@ -46,7 +48,8 @@
 # --no-install-recommends would leave those packages uninstalled.
 #
 # Exit status: 0 everything installable is installed (warnings allowed);
-# 1 a prompt was declined, listed packages conflict, or apt/extrepo failed;
+# 1 a prompt was declined (with -i), listed packages conflict, or
+# apt/extrepo failed;
 # 2 usage or environment error.
 
 set -euo pipefail
@@ -66,7 +69,7 @@ repo_root=$(dirname "$script_dir")
 # shellcheck source=lib/terminal
 . "$repo_root/lib/terminal"
 
-assume_yes=0
+assume_yes=1
 incomplete=0
 repos_file="$repo_root/packages-leaves-repos.txt"
 repos_file_given=0
@@ -77,9 +80,9 @@ usage() {
     awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "$script"
 }
 
-while getopts ':yhr:' opt; do
+while getopts ':ihr:' opt; do
     case "$opt" in
-        y) assume_yes=1 ;;
+        i) assume_yes=0 ;;
         h) usage; exit 0 ;;
         r) repos_file=$OPTARG; repos_file_given=1 ;;
         :) printf 'option -%s needs an argument\n\n' "$OPTARG" >&2; usage >&2; exit 2 ;;
@@ -117,8 +120,8 @@ run_as_root() {
     ${as_root[@]+"${as_root[@]}"} "$@"
 }
 
-# Show on stdin what a prompt is about: on the terminal (see lib/terminal),
-# or with -y, where nothing is asked, in the normal output.
+# Show on stdin what a prompt is about: with -i on the terminal (see
+# lib/terminal), and otherwise, when nothing is asked, in the normal output.
 show() {
     if [[ $assume_yes -eq 1 ]]; then
         cat
@@ -128,7 +131,7 @@ show() {
     fi
 }
 
-# True when -y was given or the user answers y. EOF on stdin counts as "no"
+# True without -i, or when the user answers y. EOF on stdin counts as "no"
 # instead of tripping set -e.
 confirm() {
     [[ $assume_yes -eq 1 ]] && return 0
@@ -381,8 +384,8 @@ if [[ ${#available[@]} -gt 0 ]]; then
     } | show
 
     if confirm 'install these?'; then
-        # Always -y here: the user has already confirmed (or passed -y), so
-        # apt must not ask a second time. A failure falls through to the
+        # Always -y here: either nothing is asked, or the user has already
+        # confirmed with -i, so apt must not ask a second time. A failure falls through to the
         # report rather than exiting under set -e.
         if ! run_as_root apt-get install -y --no-remove -- "${available[@]}"; then
             printf '\napt-get install failed; see its output above.\n' >&2

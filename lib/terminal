@@ -2,7 +2,7 @@
 # Sourced by setup and by the setup.d scripts that may need the user. setup
 # sends each step's output to its log and passes the terminal on fd 3; a step
 # run on its own gets its stdout as fd 3. Steps send prompts, and whatever a
-# prompt is about (a package list, a login code), to fd 3.
+# prompt is about (a login code, a package list with -i), to fd 3.
 
 if ! { true >&3; } 2>/dev/null; then
     exec 3>&1

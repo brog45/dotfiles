@@ -181,35 +181,35 @@ out=$(./setup.d/install-packages-leaves /nope 2>&1); rc=$?
 check 'missing list file exits 2'       '[[ $rc -eq 2 ]] && grep -q "no such list file" <<<"$out"'
 EOF
 
-scenario 'install -y as root without sudo, skip and report unavailable' <<'EOF'
+scenario 'install as root without sudo, skip and report unavailable' <<'EOF'
 apt-get update -qq
 printf 'htop\ntree  # trailing comment\n\nnot-a-real-package-xyz\n' > /tmp/list
-out=$(./setup.d/install-packages-leaves -y /tmp/list 2>&1); rc=$?
+out=$(./setup.d/install-packages-leaves /tmp/list 2>&1); rc=$?
 echo "$out" | grep -v '^\(Get\|Selecting\|Preparing\|Unpacking\|Setting up\|Processing\|Reading\|Building\|Fetched\|(Reading\)' | sed 's/^/    | /'
 check 'exit 0: unavailable is only a warning' '[[ $rc -eq 0 ]]'
 check 'htop installed'                  'dpkg -s htop >/dev/null 2>&1'
 check 'tree installed (inline comment stripped)' 'dpkg -s tree >/dev/null 2>&1'
 check 'unavailable package reported as a warning' 'grep -A1 "^warning: 1 package(s) not found" <<<"$out" | grep -q "not-a-real-package-xyz"'
-out=$(./setup.d/install-packages-leaves -y /tmp/list 2>&1); rc=$?
+out=$(./setup.d/install-packages-leaves /tmp/list 2>&1); rc=$?
 check 're-run: still exit 0'            '[[ $rc -eq 0 ]]'
 check 're-run: nothing left to install' '! grep -q "to install" <<<"$out"'
 EOF
 
-scenario 'interactive prompt: n/EOF abort but still report, y installs once' <<'EOF'
+scenario 'interactive prompt (-i): n/EOF abort but still report, y installs once' <<'EOF'
 apt-get update -qq
 printf 'cowsay\nnot-a-real-package-xyz\n' > /tmp/list
-out=$(printf 'n\n' | ./setup.d/install-packages-leaves /tmp/list 2>&1); rc=$?
+out=$(printf 'n\n' | ./setup.d/install-packages-leaves -i /tmp/list 2>&1); rc=$?
 check '"n": exit 1'                     '[[ $rc -eq 1 ]]'
 check '"n": cowsay not installed'       '! dpkg -s cowsay >/dev/null 2>&1'
 check '"n": unavailable still reported' 'grep -q "not-a-real-package-xyz" <<<"$out"'
-out=$(printf '\n' | ./setup.d/install-packages-leaves /tmp/list 2>&1); rc=$?
+out=$(printf '\n' | ./setup.d/install-packages-leaves -i /tmp/list 2>&1); rc=$?
 check 'empty answer defaults to no'     '! dpkg -s cowsay >/dev/null 2>&1'
-out=$(./setup.d/install-packages-leaves /tmp/list 2>&1 </dev/null); rc=$?
+out=$(./setup.d/install-packages-leaves -i /tmp/list 2>&1 </dev/null); rc=$?
 check 'EOF on stdin: exit 1, not a silent death' '[[ $rc -eq 1 ]] && grep -q aborted <<<"$out"'
 check 'EOF on stdin: unavailable still reported' 'grep -q "not-a-real-package-xyz" <<<"$out"'
 check 'prompt shows total with dependencies' 'grep -q "including dependencies" <<<"$out"'
 printf 'cowsay\n' > /tmp/list
-out=$(printf 'y\n' | ./setup.d/install-packages-leaves /tmp/list 2>&1); rc=$?
+out=$(printf 'y\n' | ./setup.d/install-packages-leaves -i /tmp/list 2>&1); rc=$?
 check '"y": exit 0'                     '[[ $rc -eq 0 ]]'
 check '"y": cowsay installed'           'dpkg -s cowsay >/dev/null 2>&1'
 check '"y": apt did not ask a second time' '! grep -q "Do you want to continue" <<<"$out"'
@@ -221,7 +221,7 @@ apt-get update -qq
 # Each is installable alone, so this must be reported as a conflict (an
 # error), not set aside as an unsatisfiable package (a warning).
 printf 'postfix\nexim4-daemon-light\nnot-a-real-package-xyz\n' > /tmp/list
-out=$(./setup.d/install-packages-leaves -y /tmp/list 2>&1); rc=$?
+out=$(./setup.d/install-packages-leaves /tmp/list 2>&1); rc=$?
 echo "$out" | sed 's/^/    | /'
 check 'exit status 1 (a conflict is an error)' '[[ $rc -eq 1 ]]'
 check 'explains the conflict'           'grep -q "cannot install these packages together" <<<"$out"'
@@ -237,7 +237,7 @@ useradd -m tester
 echo 'tester ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/tester
 chmod -R a+rX /work
 printf 'htop\n' > /tmp/list; chmod a+r /tmp/list
-out=$(su tester -c '/work/setup.d/install-packages-leaves -y /tmp/list' 2>&1); rc=$?
+out=$(su tester -c '/work/setup.d/install-packages-leaves /tmp/list' 2>&1); rc=$?
 check 'exit status 0'                   '[[ $rc -eq 0 ]]'
 check 'htop installed via sudo'         'dpkg -s htop >/dev/null 2>&1'
 EOF
@@ -247,7 +247,7 @@ apt-get update -qq
 useradd -m tester
 chmod -R a+rX /work
 printf 'htop\n' > /tmp/list; chmod a+r /tmp/list
-out=$(su tester -c '/work/setup.d/install-packages-leaves -y /tmp/list' 2>&1); rc=$?
+out=$(su tester -c '/work/setup.d/install-packages-leaves /tmp/list' 2>&1); rc=$?
 echo "$out" | sed 's/^/    | /'
 check 'exit status 2'                   '[[ $rc -eq 2 ]]'
 check 'says sudo is missing'            'grep -q "sudo is not installed" <<<"$out"'
@@ -370,7 +370,7 @@ mkdir -p hosts/test
 cp /vol/S_A packages-leaves.txt
 cp /vol/L_A hosts/test/packages-leaves.txt
 echo not-in-any-repo-xyz >> hosts/test/packages-leaves.txt
-out=$(./setup.d/install-packages-leaves -y 2>&1); rc=$?
+out=$(./setup.d/install-packages-leaves 2>&1); rc=$?
 check 'installer exit 0 (the planted package is only a warning)' '[[ $rc -eq 0 ]]'
 check 'planted package reported'        'grep -q not-in-any-repo-xyz <<<"$out"'
 check 'shared-only htop and tree installed' 'dpkg -s htop tree >/dev/null 2>&1'
@@ -413,7 +413,7 @@ tailscale           tailscale
 never-needed-repo   htop
 REPOS
 check 'extrepo not installed yet'       '! command -v extrepo >/dev/null'
-out=$(./setup.d/install-packages-leaves -y -r /tmp/repos /tmp/list 2>&1); rc=$?
+out=$(./setup.d/install-packages-leaves -r /tmp/repos /tmp/list 2>&1); rc=$?
 echo "$out" | grep -v -E '^(Get|Selecting|Preparing|Unpacking|Setting up|Processing|Reading|Building|Fetched|\(Reading|debconf|  [a-z0-9].*[a-z0-9]$)' | sed 's/^/    | /'
 check 'exit 0 (warp-terminal is only a warning)' '[[ $rc -eq 0 ]]'
 check 'extrepo was installed'           'command -v extrepo >/dev/null'
@@ -425,7 +425,7 @@ check 'code installed'                  'dpkg -s code >/dev/null 2>&1'
 check 'tailscale installed'             'dpkg -s tailscale >/dev/null 2>&1'
 check 'htop installed'                  'dpkg -s htop >/dev/null 2>&1'
 check 'warp-terminal warned as not found' 'grep -A1 "^warning: 1 package(s) not found" <<<"$out" | grep -q warp-terminal'
-out=$(./setup.d/install-packages-leaves -y -r /tmp/repos /tmp/list 2>&1); rc=$?
+out=$(./setup.d/install-packages-leaves -r /tmp/repos /tmp/list 2>&1); rc=$?
 check 're-run: exit 0'                  '[[ $rc -eq 0 ]]'
 check 're-run: no repo work, nothing to install' '! grep -q -e "repo(s) to enable" -e "to install" <<<"$out"'
 EOF
@@ -440,7 +440,7 @@ mv /etc/apt/sources.list.d/extrepo_tailscale.sources /etc/apt/sources.list.d/tai
 apt-get update -qq
 printf 'tailscale\n' > /tmp/list
 printf 'tailscale tailscale\n' > /tmp/repos
-out=$(./setup.d/install-packages-leaves -y -r /tmp/repos /tmp/list 2>&1); rc=$?
+out=$(./setup.d/install-packages-leaves -r /tmp/repos /tmp/list 2>&1); rc=$?
 check 'exit 0'                          '[[ $rc -eq 0 ]]'
 check 'no duplicate extrepo source added' '[[ ! -e /etc/apt/sources.list.d/extrepo_tailscale.sources ]]'
 check 'did not offer to enable a repo'  '! grep -q "repo(s) to enable" <<<"$out"'
@@ -453,7 +453,7 @@ apt-get update -qq
 printf 'code\n' > /tmp/list
 # The same repository on two lines must still be offered (and enabled) once.
 printf 'vscode code\nvscode code\n' > /tmp/repos
-out=$(printf 'n\n' | ./setup.d/install-packages-leaves -r /tmp/repos /tmp/list 2>&1); rc=$?
+out=$(printf 'n\n' | ./setup.d/install-packages-leaves -i -r /tmp/repos /tmp/list 2>&1); rc=$?
 check 'exit 1 (declined)'               '[[ $rc -eq 1 ]]'
 check 'repo listed twice is offered once' 'grep -q "^1 vendor repo(s) to enable" <<<"$out"'
 check 'extrepo not installed'           '! command -v extrepo >/dev/null'
@@ -469,7 +469,7 @@ apt-get install -y -qq postfix >/dev/null 2>&1
 # exim4-daemon-light can only be installed by removing postfix. The script
 # installs only, so it must decline rather than take postfix with it.
 printf 'exim4-daemon-light\nhtop\n' > /tmp/list
-out=$(./setup.d/install-packages-leaves -y /tmp/list 2>&1); rc=$?
+out=$(./setup.d/install-packages-leaves /tmp/list 2>&1); rc=$?
 grep -E '^(warning|  [a-z])' <<<"$out" | sed 's/^/    | /'
 check 'exit 0 (a warning, not a failure)' '[[ $rc -eq 0 ]]'
 check 'postfix was not removed'         'dpkg -s postfix >/dev/null 2>&1'
@@ -484,7 +484,7 @@ apt-get install -y -qq extrepo >/dev/null 2>&1
 rm -f /etc/extrepo/config.yaml
 printf 'code\nhtop\nnot-in-any-repo\n' > /tmp/list
 printf 'vscode code\n' > /tmp/repos
-out=$(./setup.d/install-packages-leaves -y -r /tmp/repos /tmp/list 2>&1); rc=$?
+out=$(./setup.d/install-packages-leaves -r /tmp/repos /tmp/list 2>&1); rc=$?
 grep -E '^(warning|could not|  [a-z])' <<<"$out" | sed 's/^/    | /'
 check 'run survived the broken config' 'grep -q "^warning: could not enable vscode" <<<"$out"'
 check 'still installed what it could'  'dpkg -s htop >/dev/null 2>&1'
@@ -512,7 +512,7 @@ echo 'deb [trusted=yes] file:/srv/repo ./' > /etc/apt/sources.list.d/local.list
 apt-get update -qq
 printf 'dummy-broken\nhtop\nnot-in-any-repo\n' > /tmp/list
 printf 'no-such-extrepo-repo not-in-any-repo\n' > /tmp/repos
-out=$(./setup.d/install-packages-leaves -y -r /tmp/repos /tmp/list 2>&1); rc=$?
+out=$(./setup.d/install-packages-leaves -r /tmp/repos /tmp/list 2>&1); rc=$?
 echo "$out" | grep -E '^(warning|  |enabled|apt cannot)' | sed 's/^/    | /'
 check 'exit 0 (all problems are warnings)' '[[ $rc -eq 0 ]]'
 check 'htop still installed'            'dpkg -s htop >/dev/null 2>&1'
@@ -527,7 +527,7 @@ apt-get update -qq
 cp /src/packages-leaves.txt .
 [[ -d /src/hosts ]] && cp -r /src/hosts .
 export DOTFILES_HOST=$REAL_HOST
-./setup.d/install-packages-leaves -y > /tmp/install.log 2>&1; rc=$?
+./setup.d/install-packages-leaves > /tmp/install.log 2>&1; rc=$?
 echo "    installer exit status: $rc"
 echo "    --- last 40 lines of installer output ---"
 tail -40 /tmp/install.log | sed 's/^/    | /'

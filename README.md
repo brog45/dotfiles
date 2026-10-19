@@ -30,8 +30,9 @@ the new group. It then runs the scripts in `setup.d/` in the order
 shows one line per step and whether it succeeded; the steps' own output goes
 to `~/dotfiles-setup.log`, after that of earlier runs. When a step fails,
 `setup` stops and points to the log. Steps still ask on the terminal
-when they need you: a package list to confirm, a GitHub or Tailscale login, a
-password for jeeves. Before the first `sudo` that needs your password, `setup`
+when they need you: a GitHub or Tailscale login, a password for jeeves.
+Packages are installed without asking; to review the list first, run
+`setup.d/install-packages-leaves -i`. Before the first `sudo` that needs your password, `setup`
 says which step wants it, and then keeps sudo from asking again for the rest
 of the run.
 
