@@ -51,23 +51,27 @@ script is missing from the list or a listed name has no executable script.
 A step that may need the user sources `lib/terminal` and sends its prompts to
 fd 3, which is the terminal under `setup` and stdout when run on its own.
 
-## Stowing packages
+## Dotfiles in your home directory
 
-`setup` stows the `base` package. Additional packages (e.g. machine-specific
-configs) can be stowed the same way:
+The `install-stow` setup script links files into your home directory with GNU
+Stow, from `stow/` at the repo root (every machine), from `stow/` in each of
+the machine's profiles, and from `hosts/<hostname>/stow/`. For example,
+`profiles/desktop/stow/bin/rdp-tunnel` becomes `~/bin/rdp-tunnel`. A file may
+be in only one of these trees.
 
-```
-stow -vv --no-folding -t ~ <package-name>
-```
-
-`--no-folding` creates real directories in `$HOME` and links only the files.
+Stow links only the files (`--no-folding`), creating real directories for
+them. To move a file to another tree, `git mv` it and rerun `install-stow`:
+it first removes the broken links into the repo that the move left behind.
+Links to a file deleted from every tree stay behind, broken, until you remove
+them.
 
 ## Profiles
 
 A profile is a set of lists and config that several machines share, such as
 `desktop`. Each lives in `profiles/<profile>/` and may hold any of
 `packages-leaves.txt`, `packages-leaves-exclude.txt`, `flatpaks.txt`,
-`alternatives.txt`, `vscode-extensions.txt` and an `etc/` tree.
+`alternatives.txt`, `vscode-extensions.txt`, an `etc/` tree and a `stow/`
+tree.
 
 A machine builds on the profiles named in `hosts/<hostname>/profiles.txt`, one
 per line. A name with no `profiles/` directory is an error, not skipped.
@@ -115,6 +119,11 @@ machine is missing. `packages-leaves-exclude.txt` works the same way. Set
 `tests/setup-test` checks `setup` itself with fake steps in a throwaway copy
 of the repo: the step list checks, progress lines and run times, the log, and
 stopping at a failed step. It needs no root and takes a few seconds.
+
+`tests/install-stow-test` checks the `install-stow` setup script in a throwaway
+home directory: stowing from the root, profile and host trees, and upgrading
+links left by the old `base/` package or by moving a file between trees. It
+needs GNU Stow and takes about a second.
 
 `tests/packages-leaves-docker-test` checks `update-packages-leaves` and
 the `install-packages-leaves` setup script in fresh Docker containers. It needs

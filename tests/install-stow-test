@@ -1,0 +1,99 @@
+#!/usr/bin/bash
+
+# Tests for setup.d/install-stow in a throwaway home directory: stowing from
+# the root, profile and host stow/ trees, and upgrading links left by the old
+# base/ package or by moving a file between trees. Needs GNU Stow installed;
+# needs no root and runs in about a second.
+#
+# Usage: tests/install-stow-test
+
+set -uo pipefail
+
+repo=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+if ! command -v stow >/dev/null; then
+    echo "GNU Stow is not installed" >&2
+    exit 1
+fi
+
+passed=0
+failed=0
+
+check() {
+    local name=$1
+    shift
+    if "$@"; then
+        passed=$((passed + 1))
+    else
+        failed=$((failed + 1))
+        printf 'FAIL: %s\n' "$name"
+        printf '  output:\n    %s\n' "${out//$'\n'/$'\n'    }"
+    fi
+}
+
+# ~/$1 is a symlink that resolves to $2 in the test repo.
+links_to() {
+    [ -L "$HOME/$1" ] && [ "$(realpath -- "$HOME/$1")" = "$dotfiles/$2" ]
+}
+
+# ~/$1 is a real directory, not a link to one.
+real_dir() {
+    [ -d "$HOME/$1" ] && [ ! -L "$HOME/$1" ]
+}
+
+export HOME=$work/home DOTFILES_HOST=test
+dotfiles=$HOME/dotfiles
+mkdir -p "$dotfiles/setup.d" "$dotfiles/hosts/test" "$dotfiles/profiles/desktop"
+cp "$repo/setup.d/install-stow" "$dotfiles/setup.d/"
+cp -r "$repo/lib" "$dotfiles/"
+echo desktop > "$dotfiles/hosts/test/profiles.txt"
+
+run() {
+    out=$("$dotfiles/setup.d/install-stow" 2>&1)
+    rc=$?
+}
+
+# The old layout: one base/ package, stowed without --no-folding, so ~/.config
+# is a link to the whole directory.
+mkdir -p "$dotfiles/base/.config/app" "$dotfiles/base/bin"
+echo bashrc > "$dotfiles/base/.bashrc"
+echo conf > "$dotfiles/base/.config/app/conf"
+echo tool > "$dotfiles/base/bin/tool"
+echo desk > "$dotfiles/base/bin/desk"
+mkdir -p "$HOME/bin"
+stow -d "$dotfiles" -t "$HOME" base
+
+# Upgrade: base/ becomes stow/, and one file moves to the desktop profile.
+mv "$dotfiles/base" "$dotfiles/stow"
+mkdir -p "$dotfiles/profiles/desktop/stow/bin"
+mv "$dotfiles/stow/bin/desk" "$dotfiles/profiles/desktop/stow/bin/"
+run
+check 'upgrade succeeds' [ "$rc" -eq 0 ]
+check 'root file links to stow/' links_to .bashrc stow/.bashrc
+check 'root bin file links to stow/' links_to bin/tool stow/bin/tool
+check 'profile file links to the profile' links_to bin/desk profiles/desktop/stow/bin/desk
+check 'old directory link becomes a real directory' real_dir .config
+check 'file under it links to stow/' links_to .config/app/conf stow/.config/app/conf
+
+run
+check 'rerun succeeds' [ "$rc" -eq 0 ]
+check 'rerun changes nothing' [ -z "$out" ]
+
+# A file moves from the profile to the host's own tree.
+mkdir -p "$dotfiles/hosts/test/stow/bin"
+mv "$dotfiles/profiles/desktop/stow/bin/desk" "$dotfiles/hosts/test/stow/bin/"
+run
+check 'move to host tree succeeds' [ "$rc" -eq 0 ]
+check 'moved file links to the host tree' links_to bin/desk hosts/test/stow/bin/desk
+
+# A broken link that points outside the repo is not ours to remove.
+echo vimrc > "$dotfiles/stow/.vimrc"
+ln -s /nonexistent/vimrc "$HOME/.vimrc"
+run
+check 'foreign broken link makes install-stow fail' [ "$rc" -ne 0 ]
+check 'foreign broken link is kept' [ "$(readlink "$HOME/.vimrc")" = /nonexistent/vimrc ]
+
+printf '%d passed, %d failed\n' "$passed" "$failed"
+[ "$failed" -eq 0 ]
