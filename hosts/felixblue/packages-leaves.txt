@@ -2,7 +2,6 @@ asunder
 claude-desktop
 kernelstub
 language-pack-gnome-en
-miller
 ncal
 python3-typing-extensions
 system76-driver
