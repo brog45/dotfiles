@@ -43,19 +43,27 @@ def matches(name):
     return any(fnmatchcase(name, pat) for pat in patterns)
 
 
+records = {}     # candidate records fetched so far, as {name: {field: value}}
+fetched = set()  # names asked about, including ones apt does not know
+
+
 def candidates(names):
     """Candidate records of the given packages, as {name: {field: value}}."""
-    # Exits non-zero when any name is unknown, but still prints the rest.
-    out = subprocess.run(
-        ["apt-cache", "show", "--no-all-versions", *names],
-        capture_output=True, text=True,
-    ).stdout
-    records = {}
-    for para in out.split("\n\n"):
-        fields = dict(re.findall(r"^([\w-]+): (.*)$", para, re.M))
-        if "Package" in fields:
-            records.setdefault(fields["Package"], fields)
-    return records
+    # Each apt-cache call takes a moment however many names it is given, so
+    # ask only about names not asked about before.
+    new = [name for name in names if name not in fetched]
+    if new:
+        fetched.update(new)
+        # Exits non-zero when any name is unknown, but still prints the rest.
+        out = subprocess.run(
+            ["apt-cache", "show", "--no-all-versions", *new],
+            capture_output=True, text=True,
+        ).stdout
+        for para in out.split("\n\n"):
+            fields = dict(re.findall(r"^([\w-]+): (.*)$", para, re.M))
+            if "Package" in fields:
+                records.setdefault(fields["Package"], fields)
+    return {name: records[name] for name in names if name in records}
 
 
 def groups(record, *fields):
@@ -83,9 +91,8 @@ queue = [
 seen = set(queue)
 stubs = {}
 while queue:
-    records = candidates(queue)
-    queue = []
-    for record in records.values():
+    found = []
+    for record in candidates(queue).values():
         for alts in groups(record, "Depends"):
             # Only a group with no acceptable alternative needs a stub.
             if all(matches(name) for name, _ in alts):
@@ -95,13 +102,13 @@ while queue:
             for name, _ in alts:
                 if name not in seen:
                     seen.add(name)
-                    queue.append(name)
+                    found.append(name)
     # Follow only metapackages and tasks; ordinary packages cannot pull in
     # another metapackage's hard dependency on what is being removed.
     queue = [
-        name for name, rec in candidates(queue).items()
+        name for name, rec in candidates(found).items()
         if rec.get("Section", "").split("/")[-1] in ("tasks", "metapackages")
-    ] if queue else []
+    ]
 
 # A versioned dependency such as "evolution (>= 3.56)" is met by providing
 # exactly the version it names.
@@ -144,5 +151,13 @@ EOF
     sudo apt-mark auto $stub >/dev/null
 fi
 
-# 3. Remove them. The stub keeps the metapackages that depend on them.
-sudo apt-get remove --auto-remove --purge -y "${PACKAGES[@]}"
+# 3. Remove them. The stub keeps the metapackages that depend on them. Any
+# state but not-installed needs the remove, including config files left by a
+# remove without --purge. dpkg-query fails when no known package matches.
+present=$(dpkg-query -W -f '${db:Status-Status} ${Package}\n' "${PACKAGES[@]}" 2>/dev/null |
+    awk '$1 != "not-installed" { print $2 }' || true)
+if [ -z "$present" ]; then
+    echo "None of ${PACKAGES[*]} is installed"
+else
+    sudo apt-get remove --auto-remove --purge -y "${PACKAGES[@]}"
+fi
