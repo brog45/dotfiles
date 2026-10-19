@@ -1,0 +1,204 @@
+#!/usr/bin/bash
+
+# Tests for setup.d/syncthing with two throwaway Syncthing instances, one as
+# jeeves and one as the machine being set up, each in its own home directory.
+# A fake ssh runs jeeves's commands against the first. Checks pairing the
+# devices, joining jeeves's folders by label, asking before merging a folder
+# that has files, rerunning, and refusing a folder already synced under another
+# ID. Needs Syncthing and jq installed; needs no root, and runs in about 5
+# seconds. The instances only listen on localhost and announce nothing.
+#
+# Usage: tests/syncthing-test
+
+# The folder paths are written with a literal ~, as Syncthing keeps them.
+# shellcheck disable=SC2088
+
+set -uo pipefail
+
+repo=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+work=$(mktemp -d)
+
+for cmd in syncthing jq; do
+    if ! command -v "$cmd" >/dev/null; then
+        echo "$cmd is not installed" >&2
+        exit 1
+    fi
+done
+
+# Keep Syncthing's config in the throwaway homes.
+unset XDG_CONFIG_HOME XDG_STATE_HOME STHOMEDIR STCONFDIR STDATADIR
+
+hub_home=$work/hub
+client_home=$work/client
+
+# The throwaway instances still running, found by their home directories.
+instances() {
+    local pid
+    for pid in $(pgrep -x syncthing); do
+        if grep -qzF "HOME=$work/" "/proc/$pid/environ" 2>/dev/null; then
+            echo "$pid"
+        fi
+    done
+}
+
+# Ask both instances to shut down, and wait for them to exit.
+stop_instances() {
+    local home _
+    for home in "$hub_home" "$client_home"; do
+        HOME=$home syncthing cli operations shutdown >/dev/null 2>&1
+    done
+    for _ in $(seq 20); do
+        [ -z "$(instances)" ] && return
+        sleep 0.5
+    done
+    instances | xargs -r kill
+}
+trap 'stop_instances; rm -rf "$work"' EXIT
+
+passed=0
+failed=0
+
+check() {
+    local name=$1
+    shift
+    if "$@"; then
+        passed=$((passed + 1))
+    else
+        failed=$((failed + 1))
+        printf 'FAIL: %s\n' "$name"
+        printf '  output:\n    %s\n' "${out//$'\n'/$'\n'    }"
+    fi
+}
+
+# The last run's output has, or lacks, a line matching an extended regex.
+has() { grep -qE -- "$1" <<<"$out"; }
+lacks() { ! grep -qE -- "$1" <<<"$out"; }
+
+# Device $1 is not among the lines that follow.
+not_listed() { ! grep -qxF -- "$1" <<<"$2"; }
+
+# Make an instance's keys and config, listening on localhost only and
+# announcing nothing.
+generate() {
+    local config=$1/.local/state/syncthing/config.xml
+    HOME=$1 syncthing generate --no-default-folder >/dev/null 2>&1
+    sed -i -e 's|<listenAddress>default<|<listenAddress>tcp://127.0.0.1:0<|' \
+        -e 's|<\(globalAnnounceEnabled\|localAnnounceEnabled\|relaysEnabled\|natEnabled\)>true<|<\1>false<|' \
+        "$config"
+}
+
+hub() { HOME=$hub_home syncthing cli "$@"; }
+client() { HOME=$client_home syncthing cli "$@"; }
+
+wait_ready() {
+    local _
+    for _ in $(seq 30); do
+        HOME=$1 syncthing cli show system >/dev/null 2>&1 && return 0
+        sleep 0.5
+    done
+    return 1
+}
+
+# jeeves, with a Music folder kept at another path than ~/Music.
+mkdir -p "$hub_home"
+generate "$hub_home"
+HOME=$hub_home setsid -f syncthing serve --no-browser --no-restart </dev/null >"$work/hub.log" 2>&1
+if ! wait_ready "$hub_home"; then
+    echo "The hub instance did not start; see:" >&2
+    cat "$work/hub.log" >&2
+    exit 1
+fi
+hub config folders add --id docs-1 --label Documents --path '~/Documents'
+hub config folders add --id music-1 --label Music --path '~/music-elsewhere'
+hub config folders add --id other-1 --label Other --path '~/Other'
+hub_id=$(hub show system | jq -r .myID)
+
+# Fake ssh and getent: jeeves.lan resolves, and ssh runs the command in the
+# hub's home.
+mkdir -p "$work/bin"
+cat > "$work/bin/ssh" <<EOF
+#!/usr/bin/bash
+while [ \$# -gt 0 ]; do
+    case \$1 in
+        -o) shift 2 ;;
+        -*) shift ;;
+        *) break ;;
+    esac
+done
+shift
+HOME=$hub_home exec bash -c "\$*"
+EOF
+cat > "$work/bin/getent" <<'EOF'
+#!/usr/bin/bash
+echo "127.0.0.1 jeeves.lan"
+EOF
+chmod +x "$work/bin/ssh" "$work/bin/getent"
+
+# A copy of the repo, as the host "test" with one profile.
+dotfiles=$work/repo
+mkdir -p "$dotfiles/setup.d" "$dotfiles/hosts/test" "$dotfiles/profiles/desktop"
+cp "$repo/setup.d/syncthing" "$dotfiles/setup.d/"
+cp -r "$repo/lib" "$dotfiles/"
+echo desktop > "$dotfiles/hosts/test/profiles.txt"
+printf '%s\n' '~/Documents' '~/Music' > "$dotfiles/profiles/desktop/syncthing-folders.txt"
+
+# As on a fresh install, Music is empty; Documents is not.
+mkdir -p "$client_home/Documents/old" "$client_home/Music"
+echo old > "$client_home/Documents/notes.txt"
+echo old > "$client_home/Documents/old/more.txt"
+generate "$client_home"
+
+# Run the step, with $1 as the answer to its prompts.
+run() {
+    out=$(HOME=$client_home DOTFILES_HOST=test PATH=$work/bin:$PATH \
+        "$dotfiles/setup.d/syncthing" 2>&1 <<<"${1:-}")
+    rc=$?
+}
+
+# The folders and devices in an instance's config.
+folder_path() { "$1" config folders "$2" path get 2>/dev/null; }
+folder_devices() { "$1" config folders "$2" devices list 2>/dev/null; }
+
+run n
+client_id=$(client show system 2>/dev/null | jq -r .myID)
+check 'first run succeeds' [ "$rc" -eq 0 ]
+check 'starts Syncthing' has '^Starting Syncthing$'
+check 'adds the autostart entry' \
+    cmp -s /usr/share/applications/syncthing-start.desktop "$client_home/.config/autostart/syncthing-start.desktop"
+check 'adds jeeves as an introducer' [ "$(client config devices "$hub_id" introducer get 2>/dev/null)" = true ]
+check 'adds the machine to jeeves' [ "$(hub config devices "$client_id" name get 2>/dev/null)" = test ]
+check 'the empty Music joins without asking' [ "$(grep -c 'is not synced yet' <<<"$out")" -eq 1 ]
+check 'Music is joined by label, at ~/Music' [ "$(folder_path client music-1)" = '~/Music' ]
+check 'jeeves shares Music' grep -qxF "$client_id" <<<"$(folder_devices hub music-1)"
+check 'an unlisted folder is not joined' [ -z "$(folder_path client other-1)" ]
+check 'jeeves does not share Other' not_listed "$client_id" "$(folder_devices hub other-1)"
+check 'asks about Documents, counting its files' has '^~/Documents is not synced yet, but has 2 files'
+check 'and lists its top level' has '^    notes\.txt$'
+check 'no skips Documents' [ -z "$(folder_path client docs-1)" ]
+check 'and leaves jeeves unshared' not_listed "$client_id" "$(folder_devices hub docs-1)"
+check 'and warns' has '^Warning: skipped ~/Documents'
+
+run y
+check 'yes succeeds' [ "$rc" -eq 0 ]
+check 'Documents keeps its path' [ "$(folder_path client docs-1)" = '~/Documents' ]
+check 'Documents is shared with jeeves' grep -qxF "$hub_id" <<<"$(folder_devices client docs-1)"
+check 'jeeves shares Documents' grep -qxF "$client_id" <<<"$(folder_devices hub docs-1)"
+check 'the merged Documents keeps its files' [ -f "$client_home/Documents/notes.txt" ]
+
+run
+check 'rerun succeeds' [ "$rc" -eq 0 ]
+check 'rerun starts nothing' lacks 'Starting'
+check 'rerun asks nothing' lacks 'is not synced yet'
+check 'rerun adds nothing' lacks 'Adding|Sharing'
+
+# A folder at a listed path, synced under another ID.
+client config folders add --id pics-9 --label Pictures --path '~/Pictures'
+hub config folders add --id pics-1 --label Pictures --path '~/Pictures'
+echo '~/Pictures' >> "$dotfiles/profiles/desktop/syncthing-folders.txt"
+run
+check 'another ID at the path fails' [ "$rc" -ne 0 ]
+check 'and says which' has 'already synced as folder pics-9'
+check 'and leaves jeeves unshared' not_listed "$client_id" "$(folder_devices hub pics-1)"
+
+printf '%d passed, %d failed\n' "$passed" "$failed"
+[ "$failed" -eq 0 ]

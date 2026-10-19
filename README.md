@@ -30,7 +30,8 @@ the new group. It then runs the scripts in `setup.d/` in the order
 shows one line per step and whether it succeeded; the steps' own output goes
 to `~/dotfiles-setup.log`, after that of earlier runs. When a step fails,
 `setup` stops and points to the log. Steps still ask on the terminal
-when they need you: a GitHub or Tailscale login, a password for jeeves.
+when they need you: a GitHub or Tailscale login, a password for jeeves,
+whether to merge a folder that has files into Syncthing.
 Packages are installed without asking; to review the list first, run
 `setup.d/install-packages-leaves -i`. Before the first `sudo` that needs your password, `setup`
 says which step wants it, and then keeps sudo from asking again for the rest
@@ -71,8 +72,8 @@ them.
 A profile is a set of lists and config that several machines share, such as
 `desktop`. Each lives in `profiles/<profile>/` and may hold any of
 `packages-leaves.txt`, `packages-leaves-exclude.txt`, `flatpaks.txt`,
-`alternatives.txt`, `vscode-extensions.txt`, an `etc/` tree, a `stow/`
-tree and an `avatar.txt`.
+`alternatives.txt`, `vscode-extensions.txt`, `syncthing-folders.txt`, an
+`etc/` tree, a `stow/` tree and an `avatar.txt`.
 
 A machine builds on the profiles named in `hosts/<hostname>/profiles.txt`, one
 per line. A name with no `profiles/` directory is an error, not skipped.
@@ -84,6 +85,22 @@ into `/etc` at the same paths by the `install-etc` setup script. Where both
 have the same file, the host's wins. Use drop-in directories such as
 `/etc/systemd/logind.conf.d/` rather than replacing a package's own config
 file.
+
+## Syncthing
+
+The `syncthing` setup script adds Syncthing to your startup applications,
+starts it, and syncs the folders listed in `syncthing-folders.txt`, from the
+machine's profiles and `hosts/<hostname>/`, with jeeves, the hub. Each folder
+joins jeeves's folder whose label is the directory's name, wherever jeeves
+keeps it. The script adds the machine to jeeves over SSH (with the key from
+`jeeves-ssh-key`) and makes jeeves an introducer, so the other machines that
+share those folders with jeeves are added too. A folder that is not synced
+yet but already has files (on a fresh install it is empty) is listed, and you
+are asked whether to merge it into jeeves's; if not, it is skipped until a
+rerun. A merge keeps a file that differs on both sides as a `.sync-conflict`
+copy. Nothing is ever deleted. On jeeves itself, and away from the home
+network, it only starts Syncthing. The `desktop` profile lists `~/Documents`,
+`~/Dropbox`, `~/Music` and `~/Pictures`.
 
 ## User picture
 
@@ -133,6 +150,13 @@ stopping at a failed step. It needs no root and takes a few seconds.
 home directory: stowing from the root, profile and host trees, and upgrading
 links left by the old `base/` package or by moving a file between trees. It
 needs GNU Stow and takes about a second.
+
+`tests/syncthing-test` checks the `syncthing` setup script with two throwaway
+Syncthing instances, one standing in for jeeves behind a fake `ssh`: pairing
+the devices, joining jeeves's folders by label, asking before merging a folder
+that has files, rerunning, and refusing a folder already synced under another
+ID. It needs Syncthing and `jq`, and takes
+about 5 seconds.
 
 `tests/packages-leaves-docker-test` checks `update-packages-leaves` and
 the `install-packages-leaves` setup script in fresh Docker containers. It needs

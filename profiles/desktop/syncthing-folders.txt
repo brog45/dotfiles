@@ -1,0 +1,6 @@
+# Folders the syncthing setup step syncs with jeeves, the hub. Each joins
+# jeeves's folder labeled with the directory's name.
+~/Documents
+~/Dropbox
+~/Music
+~/Pictures

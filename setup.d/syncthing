@@ -1,0 +1,184 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Start Syncthing when you log in, and sync the folders that
+# syncthing-folders.txt in this host's profiles or hosts/<host>/ lists (see
+# lib/host-lists) with jeeves, the hub. Each folder joins jeeves's folder whose
+# label is the directory's name, wherever jeeves keeps it, and jeeves is made
+# an introducer, so the other machines sharing those folders with it are added
+# too. Configures jeeves over SSH, with the key that jeeves-ssh-key authorized.
+# A folder that is not synced yet but already has files (on a fresh install it
+# is empty) is listed, and joins only if you say so: its files are then merged
+# with jeeves's, and a file that differs on both sides is kept as a
+# .sync-conflict copy. Nothing is ever deleted.
+
+script=$(readlink -f "$0")
+repo_root=$(dirname "$(dirname "$script")")
+# shellcheck source=lib/host-lists
+. "$repo_root/lib/host-lists"
+# shellcheck source=lib/terminal
+. "$repo_root/lib/terminal"
+
+hub=jeeves
+hub_host=jeeves.lan
+
+if ! command -v syncthing >/dev/null; then
+    echo "Syncthing is not installed; skipping"
+    exit 0
+fi
+
+# The entry the package installs for this, copied as is so a later package
+# version cannot leave a stale copy behind unnoticed.
+entry=/usr/share/applications/syncthing-start.desktop
+if [ -f "$entry" ]; then
+    mkdir -p ~/.config/autostart
+    if ! cmp -s "$entry" ~/.config/autostart/syncthing-start.desktop; then
+        cp "$entry" ~/.config/autostart/
+        echo "Syncthing will start when you log in"
+    fi
+else
+    echo "Warning: no $entry; add Syncthing to your startup applications by hand" >&2
+fi
+
+# Start Syncthing now too, the way the autostart entry does, so it can be
+# configured. On the first start, make its keys and config first, without the
+# default ~/Sync folder; this keeps any that exist.
+if ! syncthing cli show system >/dev/null 2>&1; then
+    syncthing generate --no-default-folder
+    echo "Starting Syncthing"
+    setsid -f syncthing serve --no-browser --logfile=default </dev/null >/dev/null 2>&1 3>&-
+    for _ in $(seq 30); do
+        if syncthing cli show system >/dev/null 2>&1; then
+            break
+        fi
+        sleep 1
+    done
+fi
+
+if [ "$host" = "$hub" ]; then
+    echo "This is $hub, the hub; no folders to pair"
+    exit 0
+fi
+
+mapfile -t folders < <(read_lists syncthing-folders.txt)
+if [ ${#folders[@]} -eq 0 ]; then
+    echo "No syncthing-folders.txt for $host; no folders to sync"
+    exit 0
+fi
+
+# jeeves is only reachable on the home network.
+if ! getent hosts "$hub_host" >/dev/null; then
+    echo "Warning: $hub_host not found (not on the home network?); skipping" >&2
+    echo "Rerun $0 from home to sync with $hub" >&2
+    exit 0
+fi
+if ! ssh -n -o BatchMode=yes -o ConnectTimeout=5 "$hub_host" true; then
+    echo "Cannot SSH to $hub_host with a key; run jeeves-ssh-key first" >&2
+    exit 1
+fi
+
+if ! command -v jq >/dev/null; then
+    sudo apt install -y jq
+fi
+
+# Run `syncthing cli` on jeeves. -n, so ssh leaves this script's stdin alone.
+on_hub() {
+    ssh -n -o BatchMode=yes "$hub_host" "syncthing cli $(printf '%q ' "$@")"
+}
+
+if ! hub_id=$(on_hub show system | jq -r .myID); then
+    echo "Syncthing is not running on $hub" >&2
+    exit 1
+fi
+my_id=$(syncthing cli show system | jq -r .myID)
+hub_config=$(on_hub config dump-json)
+my_config=$(syncthing cli config dump-json)
+
+#   has_device "$config" DEVICE
+has_device() {
+    jq -e --arg d "$2" 'any(.devices[]; .deviceID == $d)' <<<"$1" >/dev/null
+}
+
+#   folder_has_device "$config" FOLDER DEVICE
+folder_has_device() {
+    jq -e --arg f "$2" --arg d "$3" \
+        'any(.folders[]; .id == $f and any(.devices[]; .deviceID == $d))' <<<"$1" >/dev/null
+}
+
+if ! has_device "$hub_config" "$my_id"; then
+    echo "Adding $host to $hub"
+    on_hub config devices add --device-id "$my_id" --name "$host"
+fi
+if ! has_device "$my_config" "$hub_id"; then
+    echo "Adding $hub, as an introducer"
+    syncthing cli config devices add --device-id "$hub_id" --name "$hub" --introducer
+else
+    syncthing cli config devices "$hub_id" introducer set true
+fi
+
+# Show what is already in a folder that is about to join, and ask whether to
+# merge it. No answer (no terminal) means no.
+#   confirm_merge PATH DIR LABEL
+confirm_merge() {
+    local path=$1 dir=$2 label=$3 reply count
+    count=$(find "$dir" -mindepth 1 -not -type d | wc -l)
+    to_terminal
+    {
+        echo "$path is not synced yet, but has $count files. Its top level:"
+        find "$dir" -mindepth 1 -maxdepth 1 -printf '    %P\n' | LC_ALL=C sort | head -n 20
+        if [ "$(find "$dir" -mindepth 1 -maxdepth 1 | wc -l)" -gt 20 ]; then
+            echo "    ..."
+        fi
+    } >&3
+    read -r -p "Merge them into $hub's $label? Otherwise $path is skipped. [y/N] " reply 2>&3 || reply=
+    [[ $reply == [yY] || $reply == [yY][eE][sS] ]]
+}
+
+synced=()
+skipped=()
+for path in "${folders[@]}"; do
+    label=$(basename "$path")
+    id=$(jq -r --arg l "$label" '[.folders[] | select(.label == $l) | .id] | if length == 1 then .[0] else empty end' <<<"$hub_config")
+    if [ -z "$id" ]; then
+        echo "$hub has no folder, or more than one, labeled $label" >&2
+        exit 1
+    fi
+
+    if ! jq -e --arg f "$id" 'any(.folders[]; .id == $f)' <<<"$my_config" >/dev/null; then
+        # Syncthing keeps a leading ~ as given, so compare expanded paths.
+        other=$(jq -r --arg home "$HOME" --arg p "${path/#\~/$HOME}" \
+            '.folders[] | select((.path | sub("^~"; $home) | rtrimstr("/")) == ($p | rtrimstr("/"))) | .id' <<<"$my_config")
+        if [ -n "$other" ]; then
+            echo "$path is already synced as folder $other, not $hub's $id;" \
+                "remove it in the Syncthing web UI and rerun $0" >&2
+            exit 1
+        fi
+        dir=${path/#\~/$HOME}
+        if [ -n "$(find "$dir" -mindepth 1 -print -quit 2>/dev/null)" ] &&
+            ! confirm_merge "$path" "$dir" "$label"; then
+            echo "Skipping $path, which has files; rerun $0 to merge it"
+            skipped+=("$path")
+            continue
+        fi
+        echo "Adding $path ($hub's folder $id)"
+        syncthing cli config folders add --id "$id" --label "$label" --path "$path"
+        my_config=$(syncthing cli config dump-json)
+    fi
+
+    if ! folder_has_device "$my_config" "$id" "$hub_id"; then
+        syncthing cli config folders "$id" devices add --device-id "$hub_id"
+    fi
+    if ! folder_has_device "$hub_config" "$id" "$my_id"; then
+        echo "Sharing $hub's $label with $host"
+        on_hub config folders "$id" devices add --device-id "$my_id"
+    fi
+    synced+=("$path")
+done
+
+if [ ${#synced[@]} -gt 0 ]; then
+    echo "Syncing ${synced[*]} with $hub; the first sync can take a while"
+fi
+if [ ${#skipped[@]} -gt 0 ]; then
+    echo "Warning: skipped ${skipped[*]}, which already had files" >&2
+fi

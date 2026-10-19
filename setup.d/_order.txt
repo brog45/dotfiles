@@ -18,6 +18,9 @@ ssh-key
 github-ssh-key
 setup-git
 jeeves-ssh-key
+# After jeeves-ssh-key, which lets it configure jeeves, and well before
+# user-avatar, whose picture is in a synced folder.
+syncthing
 tailscale
 install-vscode
 install-vscode-extensions
