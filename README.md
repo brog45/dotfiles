@@ -70,8 +70,8 @@ them.
 A profile is a set of lists and config that several machines share, such as
 `desktop`. Each lives in `profiles/<profile>/` and may hold any of
 `packages-leaves.txt`, `packages-leaves-exclude.txt`, `flatpaks.txt`,
-`alternatives.txt`, `vscode-extensions.txt`, an `etc/` tree and a `stow/`
-tree.
+`alternatives.txt`, `vscode-extensions.txt`, an `etc/` tree, a `stow/`
+tree and an `avatar.txt`.
 
 A machine builds on the profiles named in `hosts/<hostname>/profiles.txt`, one
 per line. A name with no `profiles/` directory is an error, not skipped.
@@ -83,6 +83,14 @@ into `/etc` at the same paths by the `install-etc` setup script. Where both
 have the same file, the host's wins. Use drop-in directories such as
 `/etc/systemd/logind.conf.d/` rather than replacing a package's own config
 file.
+
+## User picture
+
+The `user-avatar` setup script sets your picture on the login and lock
+screens (GNOME and COSMIC) to the image that `avatar.txt` names, from the
+machine's profiles or `hosts/<hostname>/`, the host's winning. A leading `~`
+means your home directory. The picture stays out of the repo, so the step
+skips with a warning until it exists. The `desktop` profile has one.
 
 ## Updating the lists
 

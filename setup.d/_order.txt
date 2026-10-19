@@ -29,5 +29,6 @@ update-alternatives
 keyboard-shortcuts
 tray-icons
 window-buttons
+user-avatar
 lock-root
 difftastic

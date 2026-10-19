@@ -1,0 +1,2 @@
+# The picture for the login and lock screens (see setup.d/user-avatar).
+~/Pictures/picturesofme/cartoon-20251126.jpg

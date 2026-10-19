@@ -1,0 +1,49 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Set the user's picture on the login and lock screens to the image that
+# avatar.txt in this host's profiles or hosts/<host>/ names (see
+# lib/host-lists); the host's wins. The picture itself stays out of the repo.
+# GNOME (GDM) and COSMIC (cosmic-greeter) both take it from AccountsService,
+# which keeps its own copy in /var/lib/AccountsService/icons/<user>.
+
+script=$(readlink -f "$0")
+repo_root=$(dirname "$(dirname "$script")")
+# shellcheck source=lib/host-lists
+. "$repo_root/lib/host-lists"
+
+avatar=$(read_lists avatar.txt | tail -n 1)
+if [ -z "$avatar" ]; then
+    echo "No avatar.txt for $host; skipping the user picture"
+    exit 0
+fi
+avatar=${avatar/#\~/$HOME}
+# On a fresh install the picture may not have synced yet.
+if [ ! -f "$avatar" ]; then
+    echo "Warning: $avatar does not exist; skipping the user picture" >&2
+    exit 0
+fi
+
+accounts=org.freedesktop.Accounts
+if ! user_path=$(busctl call $accounts /org/freedesktop/Accounts $accounts FindUserByName s "$USER" 2>/dev/null); then
+    echo "Warning: AccountsService is not running; skipping the user picture" >&2
+    exit 0
+fi
+# busctl prints the object path as: o "/org/freedesktop/Accounts/User1000"
+user_path=${user_path#o \"}
+user_path=${user_path%\"}
+
+# AccountsService copies the file as is, so an unchanged copy means the
+# picture is already set.
+icon=/var/lib/AccountsService/icons/$USER
+current=$(busctl get-property $accounts "$user_path" $accounts.User IconFile)
+if [ "$current" = "s \"$icon\"" ] && cmp -s "$avatar" "$icon"; then
+    echo "The user picture is already $avatar"
+    exit 0
+fi
+
+# As root this needs no polkit prompt, which `su -` (used by setup) may not
+# be able to show.
+echo "Setting the user picture to $avatar"
+sudo busctl call $accounts "$user_path" $accounts.User SetIconFile s "$avatar"
