@@ -64,7 +64,7 @@
                     navigator?.keyboard?.unlock();
                 })
                 .catch(err => {
-                    console.error("[sefi-title-extension] exitFullscreen failed:", err);
+                    console.error("[glkvm-viewer-extension] exitFullscreen failed:", err);
                 });
         } else {
             document.documentElement.requestFullscreen()
@@ -72,7 +72,7 @@
                     navigator?.keyboard?.lock?.();
                 })
                 .catch((err) => {
-                    console.warn("[sefi-title-extension] requestFullscreen failed:", err);
+                    console.warn("[glkvm-viewer-extension] requestFullscreen failed:", err);
                 });
         }
     }, true);

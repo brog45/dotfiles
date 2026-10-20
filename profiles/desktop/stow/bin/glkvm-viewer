@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-EXT_DIR="$HOME/.local/share/sefi-title-extension"
+EXT_DIR="$HOME/.local/share/glkvm-viewer-extension"
 URL='https://glkvm.lan/#/'
 
 TRYAPPS="org.chromium.Chromium com.google.Chrome"
@@ -32,19 +32,19 @@ if ! getent hosts glkvm.lan >/dev/null 2>&1; then
     suffix=$(tailscale status --json 2>/dev/null \
         | grep -oP '"MagicDNSSuffix"\s*:\s*"\K[^"]+' | head -1)
     if [[ -z "${suffix:-}" ]]; then
-        echo "sefi-laptop: glkvm.lan unreachable and tailscale suffix not found" >&2
+        echo "glkvm-viewer: glkvm.lan unreachable and tailscale suffix not found" >&2
         exit 1
     fi
     ts_host="glkvm.$suffix"
     ts_ip=$(getent hosts "$ts_host" | awk '{print $1; exit}')
     if [[ -z "$ts_ip" ]]; then
-        echo "sefi-laptop: could not resolve $ts_host" >&2
+        echo "glkvm-viewer: could not resolve $ts_host" >&2
         exit 1
     fi
     resolver_args=(--host-resolver-rules="MAP glkvm.lan $ts_ip")
 fi
 
-PROFILE_DIR="$HOME/.var/app/$APPID/data/sefi-laptop-profile"
+PROFILE_DIR="$HOME/.var/app/$APPID/data/glkvm-viewer-profile"
 
 mkdir -p "$PROFILE_DIR"
 
