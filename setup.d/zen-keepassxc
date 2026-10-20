@@ -24,11 +24,11 @@ if [ ! -x ~/.var/app/app.zen_browser.zen/.zen/native-messaging-hosts/keepassxc-p
         ~/.var/app/app.zen_browser.zen/.zen/native-messaging-hosts/keepassxc-proxy
 fi
 
-cat > ~/.var/app/app.zen_browser.zen/.zen/native-messaging-hosts/org.keepassxc.keepassxc_browser.json <<'EOF'
+cat > ~/.var/app/app.zen_browser.zen/.zen/native-messaging-hosts/org.keepassxc.keepassxc_browser.json <<EOF
 {
   "name": "org.keepassxc.keepassxc_browser",
   "description": "KeePassXC integration with native messaging support",
-  "path": "/home/brogers/.zen/native-messaging-hosts/keepassxc-proxy",
+  "path": "$HOME/.zen/native-messaging-hosts/keepassxc-proxy",
   "type": "stdio",
   "allowed_extensions": ["keepassxc-browser@keepassxc.org"]
 }

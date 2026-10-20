@@ -115,9 +115,9 @@ if ! shopt -oq posix; then
     . /etc/bash_completion
   fi
 fi
-[ -r /home/brogers/.byobu/prompt ] && . /home/brogers/.byobu/prompt   #byobu-prompt#
+[ -r "$HOME/.byobu/prompt" ] && . "$HOME/.byobu/prompt"   #byobu-prompt#
 
-export SWIVM_DIR="/home/brogers/.swivm"
+export SWIVM_DIR="$HOME/.swivm"
 [ -s "$SWIVM_DIR/swivm.sh" ] && . "$SWIVM_DIR/swivm.sh"  # This loads swivm
 
 ##### npm global without sudo #####
