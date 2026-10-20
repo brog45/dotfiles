@@ -18,35 +18,19 @@ if ! command -v stow >/dev/null; then
     sudo apt-get install -y stow
 fi
 
-# Remove the broken links into this repo that block stowing $1/stow. Such a
-# link is left over from a file that moved, from one stow/ to another (or from
-# the old base/), and stow treats a link into another of these trees as one it
-# does not own. The link can be at the file's own path or, from a stow run
-# without --no-folding, at one of its directories, so check each on the way.
-remove_stale_links() {
-    local file path part dest
-    local -a parts
-    while IFS= read -r -d '' file; do
-        IFS=/ read -r -a parts <<<"${file#"$1"/stow/}"
-        path=~
-        for part in "${parts[@]}"; do
-            path+=/$part
-            if [ -L "$path" ]; then
-                dest=$(realpath -m -- "$path")
-                if [ ! -e "$path" ] && [[ $dest == "$repo_root"/* ]]; then
-                    echo "Removing $path, a broken link to ${dest#"$repo_root"/}"
-                    rm -- "$path"
-                fi
-                break
-            fi
-            [ -d "$path" ] || break
-        done
-    done < <(find "$1/stow" \( -type f -o -type l \) -print0)
-}
+# Remove the broken links into this repo, which block stowing. Such a link is
+# left over from a file that moved, from one stow/ to another (or from the old
+# base/), or that was deleted; stow treats a link into another of these trees
+# as one it does not own. Stow writes relative links, so match the repo's
+# directory name in the target: "dotfiles/..." for a link directly in ~,
+# ".../dotfiles/..." deeper down. An unreadable directory under ~ is not worth
+# failing setup over; a link find could not remove still makes stow fail.
+repo_name=$(basename "$repo_root")
+find ~ -xdev -xtype l \( -lname "$repo_name/*" -o -lname "*/$repo_name/*" \) \
+    -delete -print || true
 
 for dir in "${list_dirs[@]}"; do
     [ -d "$dir/stow" ] || continue
-    remove_stale_links "$dir"
     # --no-folding creates the subdirectories, so stow only links the files
     stow -v --no-folding -d "$dir" -t ~ stow
 done

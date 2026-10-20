@@ -2,8 +2,8 @@
 
 # Tests for setup.d/install-stow in a throwaway home directory: stowing from
 # the root, profile and host stow/ trees, and upgrading links left by the old
-# base/ package or by moving a file between trees. Needs GNU Stow installed;
-# needs no root and runs in about a second.
+# base/ package, by moving a file between trees or by deleting one. Needs GNU
+# Stow installed; needs no root and runs in about a second.
 #
 # Usage: tests/install-stow-test
 
@@ -87,6 +87,12 @@ mv "$dotfiles/profiles/desktop/stow/bin/desk" "$dotfiles/hosts/test/stow/bin/"
 run
 check 'move to host tree succeeds' [ "$rc" -eq 0 ]
 check 'moved file links to the host tree' links_to bin/desk hosts/test/stow/bin/desk
+
+# A file is deleted from the repo, leaving its link broken.
+rm "$dotfiles/hosts/test/stow/bin/desk"
+run
+check 'deleted file run succeeds' [ "$rc" -eq 0 ]
+check 'link to the deleted file is removed' [ ! -L "$HOME/bin/desk" ]
 
 # A broken link that points outside the repo is not ours to remove.
 echo vimrc > "$dotfiles/stow/.vimrc"
