@@ -13,6 +13,10 @@
 docker-ce   docker-ce docker-model-plugin
 tailscale   tailscale
 dotnet      dotnet-sdk-10.0
+# Its post-enable command sets CLAUDE_DESKTOP_ADD_REPO="false" in
+# /etc/default/claude-desktop, so the package does not add a second entry
+# for the same repository.
+anthropic-claude-desktop    claude-desktop
 
 # warp-terminal has no extrepo entry; add its repository by hand
 # (https://releases.warp.dev/linux/deb) or it is reported as not found.

@@ -1,5 +1,6 @@
 alacritty
 ascii
+claude-desktop
 cmake
 code
 docker-ce
