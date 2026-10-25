@@ -13,7 +13,9 @@ set -euo pipefail
 # with jeeves's, and a file that differs on both sides is kept as a
 # .sync-conflict copy. Nothing is ever deleted. Each folder, on jeeves too,
 # ignores .git and node_modules directories: the patterns for them are added to
-# its ignore patterns if missing, after any it has, which are kept.
+# its ignore patterns if missing, after any it has, which are kept. If this
+# machine's record of what jeeves has looks out of date, it offers to have
+# every connected machine send its full index again.
 
 script=$(readlink -f "$0")
 repo_root=$(dirname "$(dirname "$script")")
@@ -45,19 +47,32 @@ else
     echo "Warning: no $entry; add Syncthing to your startup applications by hand" >&2
 fi
 
-# Start Syncthing now too, the way the autostart entry does, so it can be
-# configured. On the first start, make its keys and config first, without the
-# default ~/Sync folder; this keeps any that exist.
-if ! syncthing cli show system >/dev/null 2>&1; then
-    syncthing generate --no-default-folder
-    echo "Starting Syncthing"
-    setsid -f syncthing serve --no-browser --logfile=default </dev/null >/dev/null 2>&1 3>&-
+# Wait up to 30 seconds for Syncthing to answer.
+wait_ready() {
+    local _
     for _ in $(seq 30); do
         if syncthing cli show system >/dev/null 2>&1; then
-            break
+            return 0
         fi
         sleep 1
     done
+    echo "Syncthing did not start" >&2
+    return 1
+}
+
+# Start Syncthing the way the autostart entry does.
+start_syncthing() {
+    setsid -f syncthing serve --no-browser --logfile=default </dev/null >/dev/null 2>&1 3>&-
+    wait_ready
+}
+
+# Start Syncthing now too, so it can be configured. On the first start, make
+# its keys and config first, without the default ~/Sync folder; this keeps any
+# that exist.
+if ! syncthing cli show system >/dev/null 2>&1; then
+    syncthing generate --no-default-folder
+    echo "Starting Syncthing"
+    start_syncthing
 fi
 
 mapfile -t folders < <(read_lists syncthing-folders.txt)
@@ -149,6 +164,13 @@ on_hub() {
     ssh -n -o BatchMode=yes "$hub_host" "syncthing cli $(printf '%q ' "$@")"
 }
 
+# Call jeeves's REST API, sending lib/syncthing's functions along.
+#   on_hub_api PATH
+on_hub_api() {
+    ssh -n -o BatchMode=yes "$hub_host" \
+        "$(declare -f st_api_init st_api); st_api_init && st_api $(printf '%q' "$1")"
+}
+
 if ! hub_id=$(on_hub show system | jq -r .myID); then
     echo "Syncthing is not running on $hub" >&2
     exit 1
@@ -178,11 +200,19 @@ else
     syncthing cli config devices "$hub_id" introducer set true
 fi
 
+# Ask a question on the terminal. No answer (no terminal) means no.
+#   ask_yes QUESTION
+ask_yes() {
+    local reply
+    read -r -p "$1 [y/N] " reply 2>&3 || reply=
+    [[ $reply == [yY] || $reply == [yY][eE][sS] ]]
+}
+
 # Show what is already in a folder that is about to join, and ask whether to
-# merge it. No answer (no terminal) means no.
+# merge it.
 #   confirm_merge PATH DIR LABEL
 confirm_merge() {
-    local path=$1 dir=$2 label=$3 reply count
+    local path=$1 dir=$2 label=$3 count
     count=$(find "$dir" -mindepth 1 -not -type d | wc -l)
     to_terminal
     {
@@ -192,11 +222,11 @@ confirm_merge() {
             echo "    ..."
         fi
     } >&3
-    read -r -p "Merge them into $hub's $label? Otherwise $path is skipped. [y/N] " reply 2>&3 || reply=
-    [[ $reply == [yY] || $reply == [yY][eE][sS] ]]
+    ask_yes "Merge them into $hub's $label? Otherwise $path is skipped."
 }
 
 synced=()
+synced_ids=()
 skipped=()
 for path in "${folders[@]}"; do
     label=$(basename "$path")
@@ -233,6 +263,7 @@ for path in "${folders[@]}"; do
         on_hub config folders "$id" devices add --device-id "$my_id"
     fi
     synced+=("$path")
+    synced_ids+=("$id")
 done
 
 if [ ${#synced[@]} -gt 0 ]; then
@@ -240,4 +271,76 @@ if [ ${#synced[@]} -gt 0 ]; then
 fi
 if [ ${#skipped[@]} -gt 0 ]; then
     echo "Warning: skipped ${skipped[*]}, which already had files" >&2
+fi
+
+# Shut Syncthing down, and wait for it to let go of its database: starting
+# another before then fails. The process holding it is the one serving the GUI.
+stop_syncthing() {
+    local pid _
+    pid=$(ss -Hltnp "sport = :${st_gui_url##*:}" | grep -om1 'pid=[0-9]*' | cut -d= -f2)
+    if [ -z "$pid" ]; then
+        echo "Cannot find the Syncthing serving ${st_gui_url#*//}" >&2
+        return 1
+    fi
+    syncthing cli operations shutdown >/dev/null
+    for _ in $(seq 30); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            return 0
+        fi
+        sleep 1
+    done
+    echo "Syncthing did not shut down" >&2
+    return 1
+}
+
+# Restart Syncthing with --reset-deltas, so that every connected machine sends
+# its full index again. That flag acts as Syncthing starts, but its monitor
+# would pass it on to every restart after, so a short-lived instance without
+# the monitor (--no-restart) does the reset.
+reset_deltas() {
+    local pid
+    echo "Restarting Syncthing to reset its delta indexes"
+    stop_syncthing
+    syncthing serve --no-browser --no-restart --reset-deltas </dev/null >/dev/null 2>&1 3>&- &
+    pid=$!
+    wait_ready
+    syncthing cli operations shutdown >/dev/null
+    wait "$pid" || true
+    start_syncthing
+}
+
+# This machine's record of what jeeves has can go stale, missing items jeeves
+# holds. It then counts them as items jeeves needs, and the web UI shows jeeves
+# out of sync while every folder here is up to date. Rescanning and restarting
+# do not help, a full index exchange does, so offer one when, with jeeves
+# connected and both sides idle, this machine thinks jeeves needs items in a
+# folder that jeeves, asked directly, needs nothing in.
+stale=()
+if st_api system/connections | jq -e --arg d "$hub_id" '.connections[$d].connected' >/dev/null; then
+    for i in "${!synced_ids[@]}"; do
+        query="folder=$(uri "${synced_ids[$i]}")"
+        needed=$(st_api "db/completion?$query&device=$hub_id" | jq '.needItems + .needDeletes')
+        if [ "$needed" -eq 0 ] || [ "$(st_api "db/status?$query" | jq -r .state)" != idle ]; then
+            continue
+        fi
+        if on_hub_api "db/status?$query" |
+            jq -e '.state == "idle" and .needTotalItems == 0 and .needDeletes == 0' >/dev/null; then
+            stale+=("${synced[$i]}: $needed items")
+        fi
+    done
+fi
+if [ ${#stale[@]} -gt 0 ]; then
+    to_terminal
+    {
+        echo "This machine thinks $hub needs items that $hub says it has, in"
+        printf '    %s\n' "${stale[@]}"
+        echo "Its record of what $hub has looks out of date. Restarting Syncthing with"
+        echo "--reset-deltas has every connected machine send its full index again;"
+        echo "no files change."
+    } >&3
+    if ask_yes "Restart Syncthing to reset?"; then
+        reset_deltas
+    else
+        echo "Warning: $hub looks out of sync; rerun $0 to reset" >&2
+    fi
 fi

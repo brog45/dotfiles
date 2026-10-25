@@ -104,7 +104,15 @@ copy. Nothing is ever deleted. Each listed folder ignores `.git` and
 missing, after any patterns it has, which are kept. Ignore patterns are per
 machine, so this is done on every machine, jeeves included, on every run. On
 jeeves itself it only does that and starts Syncthing; away from the home
-network it also does it for the folders synced already. The `desktop` profile
+network it also does it for the folders synced already. A machine's record of
+what jeeves has can go stale, so that the web UI shows jeeves out of sync
+while every folder is up to date, and rescanning or restarting does not help.
+When jeeves is connected, both are idle, and this machine thinks jeeves needs
+items in a folder that jeeves says it needs nothing in, the script lists them
+and offers to restart Syncthing with `--reset-deltas`, which has every
+connected machine send its full index again without changing any files. The
+automated test cannot fake that state, so this part has been checked only on
+a real machine. The `desktop` profile
 lists `~/Documents`, `~/Dropbox`, `~/Music` and `~/Pictures`.
 
 When the web UI says another machine is out of sync, `./syncthing-need
