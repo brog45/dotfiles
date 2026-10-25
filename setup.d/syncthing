@@ -11,7 +11,9 @@ set -euo pipefail
 # A folder that is not synced yet but already has files (on a fresh install it
 # is empty) is listed, and joins only if you say so: its files are then merged
 # with jeeves's, and a file that differs on both sides is kept as a
-# .sync-conflict copy. Nothing is ever deleted.
+# .sync-conflict copy. Nothing is ever deleted. Each folder, on jeeves too,
+# ignores .git and node_modules directories: the patterns for them are added to
+# its ignore patterns if missing, after any it has, which are kept.
 
 script=$(readlink -f "$0")
 repo_root=$(dirname "$(dirname "$script")")
@@ -56,16 +58,90 @@ if ! syncthing cli show system >/dev/null 2>&1; then
     done
 fi
 
-if [ "$host" = "$hub" ]; then
-    echo "This is $hub, the hub; no folders to pair"
-    exit 0
-fi
-
 mapfile -t folders < <(read_lists syncthing-folders.txt)
 if [ ${#folders[@]} -eq 0 ]; then
     echo "No syncthing-folders.txt for $host; no folders to sync"
     exit 0
 fi
+
+for cmd in curl jq; do
+    if ! command -v "$cmd" >/dev/null; then
+        sudo apt install -y "$cmd"
+    fi
+done
+
+# Syncthing's REST API, for the ignore patterns, which `syncthing cli` has no
+# command for. The GUI's certificate is self-signed, hence -k.
+gui_url=http://$(syncthing cli config gui raw-address get)
+if [ "$(syncthing cli config gui raw-use-tls get)" = true ]; then
+    gui_url=https://${gui_url#http://}
+fi
+api_key=$(syncthing cli config gui apikey get)
+#   st_api PATH [CURL-ARGS...]
+st_api() {
+    local path=$1
+    shift
+    curl -fsS -k -H "X-API-Key: $api_key" "$gui_url/rest/$path" "$@"
+}
+
+# Patterns for every synced folder, so that .git and node_modules directories
+# stay on each machine. (?d) lets Syncthing delete a directory that holds only
+# these.
+ignores=('(?d).git' '(?d)node_modules')
+
+# Add whichever of $ignores a folder's ignore patterns lack, after the ones it
+# has, which are kept as they are. A pattern counts as there when it is in
+# .stignore or in a file that .stignore includes.
+#   ensure_ignores ID PATH
+ensure_ignores() {
+    local id=$1 path=$2 query current missing
+    query="db/ignores?folder=$(jq -rn --arg f "$id" '$f | @uri')"
+    current=$(st_api "$query")
+    missing=$(jq -c '$ARGS.positional - (.expanded // [])' --args "${ignores[@]}" <<<"$current")
+    if [ "$missing" = '[]' ]; then
+        return
+    fi
+    echo "Ignoring $(jq -r 'join(" and ")' <<<"$missing") in $path"
+    jq -c --argjson m "$missing" '{ignore: ((.ignore // []) + $m)}' <<<"$current" |
+        st_api "$query" -d @- >/dev/null
+}
+
+# The ID of the one folder labeled LABEL; fails if there is none, or more than
+# one.
+#   folder_by_label "$config" LABEL
+folder_by_label() {
+    jq -er --arg l "$2" '[.folders[] | select(.label == $l) | .id] | if length == 1 then .[0] else empty end' <<<"$1"
+}
+
+# The ID of a folder at PATH; fails if there is none. Syncthing keeps a
+# leading ~ as given, so this compares expanded paths.
+#   folder_by_path "$config" PATH
+folder_by_path() {
+    jq -er --arg home "$HOME" --arg p "${2/#\~/$HOME}" \
+        'first(.folders[] | select((.path | sub("^~"; $home) | rtrimstr("/")) == ($p | rtrimstr("/"))) | .id)' <<<"$1"
+}
+
+my_config=$(syncthing cli config dump-json)
+
+if [ "$host" = "$hub" ]; then
+    for path in "${folders[@]}"; do
+        label=$(basename "$path")
+        if ! id=$(folder_by_label "$my_config" "$label"); then
+            echo "$hub has no folder, or more than one, labeled $label" >&2
+            exit 1
+        fi
+        ensure_ignores "$id" "$(jq -r --arg f "$id" '.folders[] | select(.id == $f) | .path' <<<"$my_config")"
+    done
+    echo "This is $hub, the hub; no folders to pair"
+    exit 0
+fi
+
+# The folders synced already get the ignore patterns even away from home.
+for path in "${folders[@]}"; do
+    if id=$(folder_by_path "$my_config" "$path"); then
+        ensure_ignores "$id" "$path"
+    fi
+done
 
 # jeeves is only reachable on the home network.
 if ! getent hosts "$hub_host" >/dev/null; then
@@ -76,10 +152,6 @@ fi
 if ! ssh -n -o BatchMode=yes -o ConnectTimeout=5 "$hub_host" true; then
     echo "Cannot SSH to $hub_host with a key; run jeeves-ssh-key first" >&2
     exit 1
-fi
-
-if ! command -v jq >/dev/null; then
-    sudo apt install -y jq
 fi
 
 # Run `syncthing cli` on jeeves. -n, so ssh leaves this script's stdin alone.
@@ -93,7 +165,6 @@ if ! hub_id=$(on_hub show system | jq -r .myID); then
 fi
 my_id=$(syncthing cli show system | jq -r .myID)
 hub_config=$(on_hub config dump-json)
-my_config=$(syncthing cli config dump-json)
 
 #   has_device "$config" DEVICE
 has_device() {
@@ -139,17 +210,13 @@ synced=()
 skipped=()
 for path in "${folders[@]}"; do
     label=$(basename "$path")
-    id=$(jq -r --arg l "$label" '[.folders[] | select(.label == $l) | .id] | if length == 1 then .[0] else empty end' <<<"$hub_config")
-    if [ -z "$id" ]; then
+    if ! id=$(folder_by_label "$hub_config" "$label"); then
         echo "$hub has no folder, or more than one, labeled $label" >&2
         exit 1
     fi
 
     if ! jq -e --arg f "$id" 'any(.folders[]; .id == $f)' <<<"$my_config" >/dev/null; then
-        # Syncthing keeps a leading ~ as given, so compare expanded paths.
-        other=$(jq -r --arg home "$HOME" --arg p "${path/#\~/$HOME}" \
-            '.folders[] | select((.path | sub("^~"; $home) | rtrimstr("/")) == ($p | rtrimstr("/"))) | .id' <<<"$my_config")
-        if [ -n "$other" ]; then
+        if other=$(folder_by_path "$my_config" "$path"); then
             echo "$path is already synced as folder $other, not $hub's $id;" \
                 "remove it in the Syncthing web UI and rerun $0" >&2
             exit 1
@@ -164,6 +231,8 @@ for path in "${folders[@]}"; do
         echo "Adding $path ($hub's folder $id)"
         syncthing cli config folders add --id "$id" --label "$label" --path "$path"
         my_config=$(syncthing cli config dump-json)
+        # Before sharing, so it never sends or fetches what it ignores.
+        ensure_ignores "$id" "$path"
     fi
 
     if ! folder_has_device "$my_config" "$id" "$hub_id"; then
