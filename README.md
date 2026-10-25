@@ -107,6 +107,12 @@ jeeves itself it only does that and starts Syncthing; away from the home
 network it also does it for the folders synced already. The `desktop` profile
 lists `~/Documents`, `~/Dropbox`, `~/Music` and `~/Pictures`.
 
+When the web UI says another machine is out of sync, `./syncthing-need
+DEVICE` (a device's name or the start of its ID) shows what this machine
+thinks it still needs: each shared folder's completion, and the items grouped
+by their first two directory levels, largest first. `-n GROUPS` shows more
+groups (default 15); `-a` lists every item.
+
 ## User picture
 
 The `user-avatar` setup script sets your picture on the login and lock

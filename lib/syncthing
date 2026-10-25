@@ -1,0 +1,29 @@
+# shellcheck shell=bash
+# Syncthing's REST API, for what `syncthing cli` has no command for, such as
+# ignore patterns and what another device needs. Sourced by setup.d/syncthing
+# and syncthing-need. Needs curl, and Syncthing running when st_api_init is
+# called.
+
+# Find this user's Syncthing GUI and its API key. Call once, before st_api.
+st_api_init() {
+    st_gui_url=http://$(syncthing cli config gui raw-address get)
+    if [ "$(syncthing cli config gui raw-use-tls get)" = true ]; then
+        st_gui_url=https://${st_gui_url#http://}
+    fi
+    st_api_key=$(syncthing cli config gui apikey get)
+}
+
+# Call the REST API at /rest/PATH. The GUI's certificate is self-signed,
+# hence -k.
+#   st_api PATH [CURL-ARGS...]
+st_api() {
+    local path=$1
+    shift
+    curl -fsS -k -H "X-API-Key: $st_api_key" "$st_gui_url/rest/$path" "$@"
+}
+
+# S, percent-encoded for use in a query string.
+#   uri S
+uri() {
+    jq -rn --arg s "$1" '$s | @uri'
+}

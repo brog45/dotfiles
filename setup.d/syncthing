@@ -21,6 +21,8 @@ repo_root=$(dirname "$(dirname "$script")")
 . "$repo_root/lib/host-lists"
 # shellcheck source=lib/terminal
 . "$repo_root/lib/terminal"
+# shellcheck source=lib/syncthing
+. "$repo_root/lib/syncthing"
 
 hub=jeeves
 hub_host=jeeves.lan
@@ -70,19 +72,7 @@ for cmd in curl jq; do
     fi
 done
 
-# Syncthing's REST API, for the ignore patterns, which `syncthing cli` has no
-# command for. The GUI's certificate is self-signed, hence -k.
-gui_url=http://$(syncthing cli config gui raw-address get)
-if [ "$(syncthing cli config gui raw-use-tls get)" = true ]; then
-    gui_url=https://${gui_url#http://}
-fi
-api_key=$(syncthing cli config gui apikey get)
-#   st_api PATH [CURL-ARGS...]
-st_api() {
-    local path=$1
-    shift
-    curl -fsS -k -H "X-API-Key: $api_key" "$gui_url/rest/$path" "$@"
-}
+st_api_init
 
 # Patterns for every synced folder, so that .git and node_modules directories
 # stay on each machine. (?d) lets Syncthing delete a directory that holds only
@@ -95,7 +85,7 @@ ignores=('(?d).git' '(?d)node_modules')
 #   ensure_ignores ID PATH
 ensure_ignores() {
     local id=$1 path=$2 query current missing
-    query="db/ignores?folder=$(jq -rn --arg f "$id" '$f | @uri')"
+    query="db/ignores?folder=$(uri "$id")"
     current=$(st_api "$query")
     missing=$(jq -c '$ARGS.positional - (.expanded // [])' --args "${ignores[@]}" <<<"$current")
     if [ "$missing" = '[]' ]; then

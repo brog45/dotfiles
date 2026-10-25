@@ -1,0 +1,84 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Show what this machine's Syncthing thinks DEVICE still needs: for each
+# folder shared with it, its completion as this machine sees it, and the items
+# it needs grouped by their first two directory levels, with how many, their
+# size and how many are deletions, largest first. This is what the web UI
+# counts as a device's "out of sync items". DEVICE is a device's name or the
+# start of its ID.
+#
+# Usage: syncthing-need [-n GROUPS] [-a] DEVICE
+#   -n GROUPS  show this many groups per folder (default 15)
+#   -a         list every item instead of groups
+
+usage() {
+    sed -n 's/^# \{0,1\}//; /^Usage:/,/^$/p' "$0" >&2
+    exit 2
+}
+
+groups=15
+all=
+while getopts n:a opt; do
+    case $opt in
+        n) groups=$OPTARG ;;
+        a) all=1 ;;
+        *) usage ;;
+    esac
+done
+shift $((OPTIND - 1))
+[ $# -eq 1 ] || usage
+
+repo_root=$(dirname "$(readlink -f "$0")")
+# shellcheck source=lib/syncthing
+. "$repo_root/lib/syncthing"
+
+if ! syncthing cli show system >/dev/null 2>&1; then
+    echo "Syncthing is not running" >&2
+    exit 1
+fi
+st_api_init
+config=$(syncthing cli config dump-json)
+
+mapfile -t ids < <(jq -r --arg d "$1" \
+    '.devices[] | select(.name == $d or (.deviceID | startswith($d))) | .deviceID' <<<"$config")
+if [ ${#ids[@]} -ne 1 ]; then
+    echo "No device, or more than one, named or with an ID starting $1" >&2
+    exit 1
+fi
+device=${ids[0]}
+
+while IFS=$'\t' read -r id label; do
+    completion=$(st_api "db/completion?folder=$(uri "$id")&device=$device")
+    jq -r --arg l "$label" --arg f "$id" \
+        '"\($l) (\($f)): \(.completion)% complete, needs \(.needItems) items, \(.needBytes) bytes, \(.needDeletes) deletions"' \
+        <<<"$completion"
+    if [ "$(jq .needItems <<<"$completion")" -eq 0 ] && [ "$(jq .needDeletes <<<"$completion")" -eq 0 ]; then
+        continue
+    fi
+    need=$(st_api "db/remoteneed?folder=$(uri "$id")&device=$device&perpage=1000000")
+    if [ -n "$all" ]; then
+        jq -r '.files[] | "    \(if .deleted then "deleted" else .type | sub("FILE_INFO_TYPE_"; "") | ascii_downcase end)\t\(.size)\t\(.name)"' <<<"$need"
+    else
+        printf '    %7s %9s %9s  %s\n' items bytes deletions directory
+        jq -r --argjson n "$groups" '
+            .files
+            | group_by(.name | split("/")[:-1][:2] | join("/"))
+            | map({dir: (.[0].name | split("/")[:-1][:2] | join("/") | if . == "" then "." else . end),
+                   items: length,
+                   bytes: (map(.size) | add),
+                   deletions: (map(select(.deleted)) | length)})
+            | sort_by(-.bytes, -.items)
+            | (.[:$n][] | [.items, .bytes, .deletions, .dir] | @tsv),
+              (if length > $n then "...\t\(length - $n) more groups" else empty end)' <<<"$need" |
+            while IFS=$'\t' read -r items bytes deletions dir; do
+                if [ "$items" = ... ]; then
+                    echo "    ... $bytes"
+                else
+                    printf '    %7s %9s %9s  %s\n' "$items" "$(numfmt --to=iec "$bytes")" "$deletions" "$dir"
+                fi
+            done
+    fi
+done < <(jq -r --arg d "$device" \
+    '.folders[] | select(any(.devices[]; .deviceID == $d)) | [.id, .label] | @tsv' <<<"$config")
