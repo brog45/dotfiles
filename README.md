@@ -98,9 +98,14 @@ share those folders with jeeves are added too. A folder that is not synced
 yet but already has files (on a fresh install it is empty) is listed, and you
 are asked whether to merge it into jeeves's; if not, it is skipped until a
 rerun. A merge keeps a file that differs on both sides as a `.sync-conflict`
-copy. Nothing is ever deleted. On jeeves itself, and away from the home
-network, it only starts Syncthing. The `desktop` profile lists `~/Documents`,
-`~/Dropbox`, `~/Music` and `~/Pictures`.
+copy. Nothing is ever deleted. Each listed folder ignores `.git` and
+`node_modules` directories, so they stay on each machine: the script adds
+`(?d).git` and `(?d)node_modules` to the folder's ignore patterns when
+missing, after any patterns it has, which are kept. Ignore patterns are per
+machine, so this is done on every machine, jeeves included, on every run. On
+jeeves itself it only does that and starts Syncthing; away from the home
+network it also does it for the folders synced already. The `desktop` profile
+lists `~/Documents`, `~/Dropbox`, `~/Music` and `~/Pictures`.
 
 ## User picture
 
@@ -154,9 +159,10 @@ needs GNU Stow and takes about a second.
 `tests/syncthing-test` checks the `syncthing` setup script with two throwaway
 Syncthing instances, one standing in for jeeves behind a fake `ssh`: pairing
 the devices, joining jeeves's folders by label, asking before merging a folder
-that has files, rerunning, and refusing a folder already synced under another
-ID. It needs Syncthing and `jq`, and takes
-about 5 seconds.
+that has files, rerunning, refusing a folder already synced under another
+ID, and adding the ignore patterns, keeping any others, on both machines and
+away from home. It needs Syncthing, `jq` and `curl`, and takes about 8
+seconds.
 
 `tests/packages-leaves-docker-test` checks `update-packages-leaves` and
 the `install-packages-leaves` setup script in fresh Docker containers. It needs

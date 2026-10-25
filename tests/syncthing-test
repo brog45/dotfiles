@@ -4,9 +4,11 @@
 # jeeves and one as the machine being set up, each in its own home directory.
 # A fake ssh runs jeeves's commands against the first. Checks pairing the
 # devices, joining jeeves's folders by label, asking before merging a folder
-# that has files, rerunning, and refusing a folder already synced under another
-# ID. Needs Syncthing and jq installed; needs no root, and runs in about 5
-# seconds. The instances only listen on localhost and announce nothing.
+# that has files, rerunning, refusing a folder already synced under another ID,
+# and adding the .git and node_modules ignore patterns, keeping any others, on
+# both machines and away from home. Needs Syncthing, jq and curl installed;
+# needs no root, and runs in about 8 seconds. The instances only listen on
+# localhost and announce nothing.
 #
 # Usage: tests/syncthing-test
 
@@ -18,7 +20,7 @@ set -uo pipefail
 repo=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 work=$(mktemp -d)
 
-for cmd in syncthing jq; do
+for cmd in syncthing jq curl; do
     if ! command -v "$cmd" >/dev/null; then
         echo "$cmd is not installed" >&2
         exit 1
@@ -128,18 +130,22 @@ done
 shift
 HOME=$hub_home exec bash -c "\$*"
 EOF
+# With $AWAY set, it does not, as away from home.
 cat > "$work/bin/getent" <<'EOF'
 #!/usr/bin/bash
+[ -z "${AWAY:-}" ] || exit 2
 echo "127.0.0.1 jeeves.lan"
 EOF
 chmod +x "$work/bin/ssh" "$work/bin/getent"
 
 # A copy of the repo, as the host "test" with one profile.
 dotfiles=$work/repo
-mkdir -p "$dotfiles/setup.d" "$dotfiles/hosts/test" "$dotfiles/profiles/desktop"
+# jeeves builds on the same profile.
+mkdir -p "$dotfiles/setup.d" "$dotfiles/hosts/test" "$dotfiles/hosts/jeeves" "$dotfiles/profiles/desktop"
 cp "$repo/setup.d/syncthing" "$dotfiles/setup.d/"
 cp -r "$repo/lib" "$dotfiles/"
 echo desktop > "$dotfiles/hosts/test/profiles.txt"
+echo desktop > "$dotfiles/hosts/jeeves/profiles.txt"
 printf '%s\n' '~/Documents' '~/Music' > "$dotfiles/profiles/desktop/syncthing-folders.txt"
 
 # As on a fresh install, Music is empty; Documents is not.
@@ -155,9 +161,36 @@ run() {
     rc=$?
 }
 
+# The step run on jeeves.
+run_hub() {
+    out=$(HOME=$hub_home DOTFILES_HOST=jeeves PATH=$work/bin:$PATH \
+        "$dotfiles/setup.d/syncthing" 2>&1 </dev/null)
+    rc=$?
+}
+
 # The folders and devices in an instance's config.
 folder_path() { "$1" config folders "$2" path get 2>/dev/null; }
 folder_devices() { "$1" config folders "$2" devices list 2>/dev/null; }
+
+# A folder's ignore patterns, one per line, through the instance's REST API.
+#   st_api HOME PATH [CURL-ARGS...]
+st_api() {
+    local home=$1 path=$2
+    shift 2
+    curl -fsS -H "X-API-Key: $(HOME=$home syncthing cli config gui apikey get)" \
+        "http://$(HOME=$home syncthing cli config gui raw-address get)/rest/$path" "$@"
+}
+#   folder_ignores HOME FOLDER
+folder_ignores() { st_api "$1" "db/ignores?folder=$2" | jq -r '.ignore // [] | .[]'; }
+#   set_ignores HOME FOLDER PATTERN...
+set_ignores() {
+    local home=$1 folder=$2
+    shift 2
+    jq -cn '{ignore: $ARGS.positional}' --args "$@" |
+        st_api "$home" "db/ignores?folder=$folder" -d @- >/dev/null
+}
+# The ignore patterns the step adds, one per line.
+added=$'(?d).git\n(?d)node_modules'
 
 run n
 client_id=$(client show system 2>/dev/null | jq -r .myID)
@@ -170,6 +203,8 @@ check 'adds the machine to jeeves' [ "$(hub config devices "$client_id" name get
 check 'the empty Music joins without asking' [ "$(grep -c 'is not synced yet' <<<"$out")" -eq 1 ]
 check 'Music is joined by label, at ~/Music' [ "$(folder_path client music-1)" = '~/Music' ]
 check 'jeeves shares Music' grep -qxF "$client_id" <<<"$(folder_devices hub music-1)"
+check 'Music ignores .git and node_modules' [ "$(folder_ignores "$client_home" music-1)" = "$added" ]
+check 'and says so' has '^Ignoring \(\?d\)\.git and \(\?d\)node_modules in ~/Music$'
 check 'an unlisted folder is not joined' [ -z "$(folder_path client other-1)" ]
 check 'jeeves does not share Other' not_listed "$client_id" "$(folder_devices hub other-1)"
 check 'asks about Documents, counting its files' has '^~/Documents is not synced yet, but has 2 files'
@@ -184,12 +219,39 @@ check 'Documents keeps its path' [ "$(folder_path client docs-1)" = '~/Documents
 check 'Documents is shared with jeeves' grep -qxF "$hub_id" <<<"$(folder_devices client docs-1)"
 check 'jeeves shares Documents' grep -qxF "$client_id" <<<"$(folder_devices hub docs-1)"
 check 'the merged Documents keeps its files' [ -f "$client_home/Documents/notes.txt" ]
+check 'Documents ignores .git and node_modules' [ "$(folder_ignores "$client_home" docs-1)" = "$added" ]
 
 run
 check 'rerun succeeds' [ "$rc" -eq 0 ]
 check 'rerun starts nothing' lacks 'Starting'
 check 'rerun asks nothing' lacks 'is not synced yet'
-check 'rerun adds nothing' lacks 'Adding|Sharing'
+check 'rerun adds nothing' lacks 'Adding|Sharing|Ignoring'
+
+# As set up before the step added ignore patterns: other patterns, a comment,
+# and one of the two.
+set_ignores "$client_home" docs-1 '// mine' '*.tmp' '(?d).git'
+run
+check 'rerun with other ignores succeeds' [ "$rc" -eq 0 ]
+check 'adds only the missing pattern' has '^Ignoring \(\?d\)node_modules in ~/Documents$'
+check 'after the ones there, which are kept' \
+    [ "$(folder_ignores "$client_home" docs-1)" = $'// mine\n*.tmp\n(?d).git\n(?d)node_modules' ]
+
+# Away from home, the folders synced already still get them.
+set_ignores "$client_home" music-1
+AWAY=1 run
+check 'away from home succeeds' [ "$rc" -eq 0 ]
+check 'and skips pairing' has 'not found \(not on the home network\?\)'
+check 'but adds the ignore patterns' [ "$(folder_ignores "$client_home" music-1)" = "$added" ]
+
+# On jeeves, the listed folders get them, by label; the others are left alone.
+run_hub
+check 'jeeves succeeds' [ "$rc" -eq 0 ]
+check 'and pairs nothing' has '^This is jeeves, the hub; no folders to pair$'
+check 'its Music ignores .git and node_modules' [ "$(folder_ignores "$hub_home" music-1)" = "$added" ]
+check 'named by its path' has '^Ignoring .* in ~/music-elsewhere$'
+check 'an unlisted folder gets no ignores' [ -z "$(folder_ignores "$hub_home" other-1)" ]
+run_hub
+check 'jeeves rerun adds nothing' lacks 'Ignoring'
 
 # A folder at a listed path, synced under another ID.
 client config folders add --id pics-9 --label Pictures --path '~/Pictures'
