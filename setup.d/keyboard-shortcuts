@@ -5,6 +5,7 @@ set -euo pipefail
 # Set keyboard shortcuts (only GNOME is supported for now):
 #   Super+T  run x-terminal-emulator (custom shortcut)
 #   Super+W  Launchers > Launch web browser
+#   Super+,  Launchers > Settings
 #   Alt+Tab  Navigation > Switch windows (every window, not grouped by app)
 #   Super+Tab  Navigation > Switch applications (grouped, GNOME's Alt+Tab)
 
@@ -31,6 +32,7 @@ if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
 fi
 
 gsettings set $media_keys www "['<Super>w']"
+gsettings set $media_keys control-center "['<Super>comma']"
 
 # A key can be bound to only one action, so Alt+Tab has to come off
 # switch-applications before it works for switch-windows.
