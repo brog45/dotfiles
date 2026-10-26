@@ -1,0 +1,201 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Set the keyboard shortcuts, preferences and theme saved for this host in
+# the dotfiles (see lib/zen; update-zen-settings saves them) in every profile
+# of the Zen browser flatpak. Each is set once, like changing it in Zen's settings:
+# it can be changed there afterwards, and is set again only by rerunning this.
+#
+#   zen-settings            set them now, or, while Zen is running or has no
+#                           profile yet, leave them pending
+#   zen-settings --pending  set the pending ones, if Zen is closed; quiet
+#                           when there is nothing to do. ~/.bashrc.d runs this
+#                           in every new shell while something is pending.
+#
+# Zen keeps them all in memory and writes them back to the profile, so they
+# are only written while it is closed. The exception is the preferences in
+# zen/user.js, which go in the profile's user.js: Zen sets them on every
+# start, and never writes the file.
+
+# This is in a stow/bin/ tree at the repo root, or in a profile or host
+# directory, so look up from it for the repo root.
+repo_root=$(dirname "$(readlink -f "$0")")
+while [ ! -f "$repo_root/lib/host-lists" ]; do
+    if [ "$repo_root" = / ]; then
+        echo "$0 is not in the dotfiles repo" >&2
+        exit 1
+    fi
+    repo_root=$(dirname "$repo_root")
+done
+# shellcheck source=lib/zen
+. "$repo_root/lib/zen"
+
+pending_file=${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/zen-settings-pending
+
+pending_only=false
+if [ "${1:-}" = --pending ]; then
+    pending_only=true
+    [ -e "$pending_file" ] || exit 0
+fi
+
+# Print to stderr, unless --pending is waiting quietly for Zen to close.
+say() {
+    if [ "$pending_only" = false ]; then
+        echo "$@" >&2
+    fi
+}
+
+leave_pending() {
+    mkdir -p "$(dirname "$pending_file")"
+    touch "$pending_file"
+    say "$1; the Zen settings will be set in a new shell once Zen is closed"
+    exit 0
+}
+
+if ! flatpak info $zen_app >/dev/null 2>&1; then
+    rm -f "$pending_file"
+    say "The Zen flatpak is not installed; skipping the Zen settings"
+    exit 0
+fi
+
+mapfile -t shortcut_files < <(zen_files shortcuts.txt)
+mapfile -t pref_files < <(zen_files prefs.js)
+mapfile -t user_files < <(zen_files user.js)
+if [ ${#shortcut_files[@]} -eq 0 ] && [ ${#pref_files[@]} -eq 0 ] && [ ${#user_files[@]} -eq 0 ]; then
+    rm -f "$pending_file"
+    say "No Zen settings are saved for $host; skipping them"
+    exit 0
+fi
+
+mapfile -t zen_profile_dirs < <(zen_profiles)
+if [ ${#zen_profile_dirs[@]} -eq 0 ]; then
+    leave_pending "Zen has no profile yet"
+fi
+
+# Keyboard shortcuts. Zen writes zen-keyboard-shortcuts.json on first start,
+# with its defaults, so only the saved ones are changed there: those that
+# later versions add keep their defaults. Clear every modifier, keeping the
+# keys Zen wrote (it leaves out accel on a shortcut it cleared), then set the
+# saved ones.
+saved_shortcuts=$(read_shortcuts ${shortcut_files[@]+"${shortcut_files[@]}"} |
+    jq "$zen_keys_jq map_values(parse_keys)")
+# shellcheck disable=SC2016
+shortcuts_filter='
+.shortcuts |= map(
+    if .id and $saved[.id] then
+        $saved[.id] as $s
+        | .key = $s.key | .keycode = $s.keycode
+        | .modifiers |= (map_values(false) + ($s.modifiers | map({(.): true}) | add // {}))
+    else . end)
+'
+
+# Preferences
+mapfile -t pref_lines < <(read_prefs ${pref_files[@]+"${pref_files[@]}"})
+# Each line's start up to the name's closing quote, to find a pref's
+# current line whatever its value
+mapfile -t pref_keys < <(printf '%s\n' ${pref_lines[@]+"${pref_lines[@]}"} |
+    sed -n 's/^\(user_pref("[^"]*",\).*/\1/p')
+
+# Preferences Zen sets on every start. The profile's user.js is all ours, so
+# it is replaced whole, or removed when nothing is saved; one this did not
+# write is left alone.
+user_header="// Written by zen-settings from the dotfiles' zen/user.js (see lib/zen there).
+// Zen sets these on every start. Changes here are overwritten."
+mapfile -t user_lines < <(read_prefs ${user_files[@]+"${user_files[@]}"})
+user_js=
+if [ ${#user_lines[@]} -gt 0 ]; then
+    user_js=$user_header$'\n'$(printf '%s\n' "${user_lines[@]}")
+fi
+
+# Theme. The add-on manager keeps which theme is on in extensions.json;
+# extensions.activeThemeID only records it. Zen reads extensions.json only
+# when rebuilding its startup cache, addonStartup.json.lz4, so the cache is
+# removed along with the change. Leave the themes alone without a saved
+# theme, or in a profile without it.
+theme=$(printf '%s\n' ${pref_lines[@]+"${pref_lines[@]}"} |
+    sed -n 's/^user_pref("extensions\.activeThemeID", "\(.*\)");$/\1/p')
+# shellcheck disable=SC2016
+theme_filter='
+if $theme != "" and any(.addons[]; .id == $theme) then
+    .addons |= map(if .type == "theme" then
+        (.id == $theme) as $on | .active = $on | .userDisabled = ($on | not)
+    else . end)
+else . end
+'
+
+# Replace file with the text on stdin, keeping its permissions (prefs.js is
+# private).
+replace() {
+    cat >"$1.new"
+    chmod --reference="$1" "$1.new"
+    mv "$1.new" "$1"
+}
+
+for profile in "${zen_profile_dirs[@]}"; do
+    name=$(basename "$profile")
+    shortcuts=$profile/zen-keyboard-shortcuts.json
+    prefs_js=$profile/prefs.js
+    extensions=$profile/extensions.json
+
+    # Zen only reads user.js, so it can be written while Zen is running, to
+    # take effect at its next start.
+    if [ -f "$profile/user.js" ] && [ "$(head -n 1 "$profile/user.js")" != "${user_header%%$'\n'*}" ]; then
+        if [ -n "$user_js" ]; then
+            echo "Warning: leaving $name/user.js alone: zen-settings did not write it" >&2
+        fi
+    elif [ -z "$user_js" ]; then
+        if [ -f "$profile/user.js" ]; then
+            rm "$profile/user.js"
+            echo "Removed user.js from $name"
+        fi
+    elif [ ! -f "$profile/user.js" ] || [ "$user_js" != "$(cat "$profile/user.js")" ]; then
+        printf '%s\n' "$user_js" >"$profile/user.js"
+        echo "Set user.js in $name; Zen applies it at its next start"
+    fi
+
+    new_shortcuts=$(jq -c --argjson saved "$saved_shortcuts" "$shortcuts_filter" "$shortcuts")
+    set_shortcuts=false
+    if [ "$new_shortcuts" != "$(jq -c . "$shortcuts")" ]; then
+        set_shortcuts=true
+    fi
+    set_theme=false
+    if [ -f "$extensions" ]; then
+        new_extensions=$(jq -c --arg theme "$theme" "$theme_filter" "$extensions")
+        if [ "$new_extensions" != "$(jq -c . "$extensions")" ]; then
+            set_theme=true
+        fi
+    fi
+    set_prefs=false
+    for line in "${pref_lines[@]}"; do
+        if ! grep -qxF "$line" "$prefs_js"; then
+            set_prefs=true
+            break
+        fi
+    done
+
+    if [ "$set_shortcuts" = false ] && [ "$set_theme" = false ] && [ "$set_prefs" = false ]; then
+        say "The Zen settings are already set in $name"
+        continue
+    fi
+    if zen_running; then
+        leave_pending "Zen is running"
+    fi
+
+    if [ "$set_shortcuts" = true ]; then
+        printf '%s\n' "$new_shortcuts" | replace "$shortcuts"
+    fi
+    if [ "$set_theme" = true ]; then
+        printf '%s\n' "$new_extensions" | replace "$extensions"
+        rm -f "$profile/addonStartup.json.lz4"
+    fi
+    if [ "$set_prefs" = true ]; then
+        {
+            grep -vF -f <(printf '%s\n' "${pref_keys[@]}") "$prefs_js" || true
+            printf '%s\n' "${pref_lines[@]}"
+        } | replace "$prefs_js"
+    fi
+    echo "Set the Zen settings in $name"
+done
+
+rm -f "$pending_file"

@@ -1,0 +1,335 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Save the Zen browser's keyboard shortcuts and preferences from this
+# machine's profile to hosts/<host>/zen/: whatever differs from what the repo
+# root's and this host's profiles' zen/ already set (see lib/zen), which
+# setup.d/zen-settings sets. Like the other update-* scripts, it never changes
+# a root or profile file: to give several hosts a setting, move it into one by
+# hand. It points out the ones another host saved too, the likely candidates.
+# Zen may be running.
+#
+#   update-zen-settings [PROFILE]
+#
+# PROFILE is a Zen profile's directory, or its name in ~/.var/app/<zen>/.zen;
+# without one, the only profile Zen has started in, or else its default.
+#
+# Shortcuts: hosts/<host>/zen/shortcuts.txt is rewritten with each shortcut
+# that differs from what the root and profiles set, or from Zen's default
+# where they set nothing. To learn the defaults, Zen is started once without
+# a window on a throwaway profile; they are kept in
+# ~/.cache/dotfiles/zen-defaults until Zen is updated.
+#
+# Preferences: hosts/<host>/zen/prefs.js keeps its comments and order. Each
+# pref there gets its value from the profile, or is removed when it is back at
+# its default or now has the value the root and profiles set. One they set
+# that has another value here is added. One they set that is at its default
+# here is only pointed out, since prefs.js cannot set a default.
+#
+# Preferences in any zen/user.js for this host are left out: Zen sets them on
+# every start, so the profile's value says nothing about a choice.
+#
+# Most of what else Zen saves in prefs.js is its own state, not settings, so
+# each of the others is offered: to save to the host's prefs.js, with an
+# optional comment, to ignore from then on in the host's prefs-ignore.txt, or
+# neither, to be offered again next time. Without a terminal to ask on, they
+# are only listed. Those that a new profile has too, with the same value, or
+# that any prefs-ignore.txt for this host matches, are never offered.
+
+repo_root=$(dirname "$(readlink -f "$0")")
+# shellcheck source=lib/zen
+. "$repo_root/lib/zen"
+
+if ! command -v jq >/dev/null; then
+    echo "jq is not installed" >&2
+    exit 1
+fi
+if ! flatpak info $zen_app >/dev/null 2>&1; then
+    echo "The Zen flatpak is not installed" >&2
+    exit 1
+fi
+
+mapfile -t zen_profile_dirs < <(zen_profiles)
+if [ $# -gt 0 ]; then
+    profile=$1
+    if [ ! -d "$profile" ]; then
+        profile=$zen_root/$1
+    fi
+elif [ ${#zen_profile_dirs[@]} -eq 1 ]; then
+    profile=${zen_profile_dirs[0]}
+else
+    profile=$zen_root/$(sed -n 's/^Default=//p' "$zen_root/installs.ini" 2>/dev/null | head -n 1)
+fi
+if [ ! -f "$profile/prefs.js" ] || [ ! -f "$profile/zen-keyboard-shortcuts.json" ]; then
+    echo "No Zen profile to read; name one of these:" >&2
+    printf '  %s\n' ${zen_profile_dirs[@]+"${zen_profile_dirs[@]##*/}"} >&2
+    exit 1
+fi
+echo "Reading the Zen profile ${profile##*/}"
+
+# Zen's defaults: the files a new profile gets, for this build of Zen.
+defaults=${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles/zen-defaults/$(flatpak info --show-commit $zen_app)
+if [ ! -f "$defaults/prefs.js" ] || [ ! -f "$defaults/zen-keyboard-shortcuts.json" ]; then
+    echo "Starting Zen without a window to learn its defaults"
+    # Zen can only write inside its own directory.
+    tmp=$(mktemp -d "$HOME/.var/app/$zen_app/defaults-profile.XXXXXX")
+    zen_pattern="^/app/zen/zen .*--profile $tmp"
+    stop_zen() {
+        # Zen exits cleanly on SIGTERM, writing prefs.js.
+        pkill -TERM -f "$zen_pattern" || true
+        for _ in $(seq 30); do
+            pgrep -f "$zen_pattern" >/dev/null || break
+            sleep 1
+        done
+        pkill -KILL -f "$zen_pattern" || true
+        wait
+    }
+    trap 'stop_zen; rm -rf "$tmp"' EXIT
+    flatpak run $zen_app --headless --no-remote --profile "$tmp" about:blank >/dev/null 2>&1 &
+    for _ in $(seq 60); do
+        jq -e '.shortcuts | length > 0' "$tmp/zen-keyboard-shortcuts.json" >/dev/null 2>&1 && break
+        sleep 1
+    done
+    stop_zen
+    if ! jq -e '.shortcuts | length > 0' "$tmp/zen-keyboard-shortcuts.json" >/dev/null 2>&1 ||
+        [ ! -f "$tmp/prefs.js" ]; then
+        echo "Zen did not write its defaults to $tmp" >&2
+        exit 1
+    fi
+    mkdir -p "$defaults"
+    cp "$tmp/prefs.js" "$tmp/zen-keyboard-shortcuts.json" "$defaults/"
+    rm -rf "$tmp"
+    trap - EXIT
+fi
+
+host_zen=$host_dir/zen
+host_shortcuts=$host_zen/shortcuts.txt
+host_prefs=$host_zen/prefs.js
+host_ignore=$host_zen/prefs-ignore.txt
+
+# This host's zen/NAME files from the repo root and its profiles, not the
+# host's own.
+shared_files() {
+    zen_files "$1" | grep -vxF "$host_zen/$1" || true
+}
+
+# Point out entries of the host's zen/NAME that another host saved too, given
+# the entries on stdin (one per line, as normalized by the given command) and
+# a sed script that prints an entry's name.
+#   printf '%s\n' "${shortcuts[@]}" | also_listed shortcuts.txt normalize 's/ .*//'
+also_listed() {
+    local name=$1 normalize=$2 to_name=$3 entries other common
+    entries=$(LC_ALL=C sort -u)
+    for other in "$repo_root"/hosts/*/zen/"$name"; do
+        [[ -f $other && $other != "$host_zen/$name" ]] || continue
+        common=$(LC_ALL=C comm -12 <(printf '%s\n' "$entries") <("$normalize" "$other" | LC_ALL=C sort -u) |
+            sed "$to_name" | tr '\n' ' ')
+        if [[ -n $common ]]; then
+            printf 'also in %s (move them to a profile both hosts use): %s\n' \
+                "${other#"$repo_root"/}" "${common% }" >&2
+        fi
+    done
+}
+
+# Write file from stdin, or remove it when there is nothing but comments, as
+# well as the host's zen/ when that leaves it empty.
+write_host_file() {
+    local file=$1 text
+    text=$(cat)
+    if ! grep -qv -e '^[[:space:]]*#' -e '^[[:space:]]*//' -e '^[[:space:]]*$' <<<"$text"; then
+        rm -f "$file"
+        echo "${file#"$repo_root"/}: nothing beyond the root and profiles"
+        rmdir --ignore-fail-on-non-empty "$host_zen" 2>/dev/null || true
+        return
+    fi
+    if [ -f "$file" ] && [ "$text" = "$(cat "$file")" ]; then
+        echo "${file#"$repo_root"/} is up to date"
+        return
+    fi
+    mkdir -p "$host_zen"
+    printf '%s\n' "$text" >"$file"
+    echo "Updated ${file#"$repo_root"/}"
+}
+
+# Keyboard shortcuts
+
+# A shortcuts.txt's entries as "ID KEYS"
+normalize_shortcuts() {
+    grep -v '^[[:space:]]*#' "$1" | awk 'NF { print $1, $2 }'
+}
+
+mapfile -t files < <(shared_files shortcuts.txt)
+shared_shortcuts=$(read_shortcuts ${files[@]+"${files[@]}"})
+# Each shortcut that differs from the root's and profiles' keys, or Zen's
+# default where they have none. keys_text also evens out what Zen changes
+# when it rewrites the file: a missing keycode as null or "", and a key's
+# case.
+mapfile -t shortcuts < <(jq -n -r --argjson shared "$shared_shortcuts" \
+    --slurpfile defaults "$defaults/zen-keyboard-shortcuts.json" \
+    --slurpfile current "$profile/zen-keyboard-shortcuts.json" "$zen_keys_jq"'
+    def canon: parse_keys | .modifiers |= (map({(.): true}) | add // {}) | keys_text;
+    ($defaults[0].shortcuts | map(select(.id) | {(.id): keys_text}) | add) as $d
+    | $current[0].shortcuts[] | select(.id)
+    | select(keys_text != (if $shared[.id] then $shared[.id] | canon else $d[.id] end))
+    | "\(.id) \(keys_text)"' | sort)
+{
+    cat <<EOF
+# Zen keyboard shortcuts for $host only, beyond those of the repo root's and
+# its profiles' zen/shortcuts.txt: each one's ID, then its keys (see lib/zen).
+# Written by update-zen-settings.
+
+EOF
+    for shortcut in ${shortcuts[@]+"${shortcuts[@]}"}; do
+        printf '%-40s %s\n' "${shortcut%% *}" "${shortcut#* }"
+    done
+} | write_host_file "$host_shortcuts"
+if [ ${#shortcuts[@]} -gt 0 ]; then
+    printf '%s\n' "${shortcuts[@]}" | also_listed shortcuts.txt normalize_shortcuts 's/ .*//'
+fi
+
+# Preferences
+
+declare -A current
+while IFS= read -r line; do
+    current[$(pref_name "$line")]=$line
+done < <(pref_lines "$profile/prefs.js")
+
+# What the root and profiles set, and in which file, the last one winning
+declare -A shared shared_file
+mapfile -t files < <(shared_files prefs.js)
+for file in ${files[@]+"${files[@]}"}; do
+    while IFS= read -r line; do
+        name=$(pref_name "$line")
+        shared[$name]=$line
+        shared_file[$name]=${file#"$repo_root"/}
+    done < <(pref_lines "$file")
+done
+
+# Those in user.js, which count as saved
+declare -A saved
+mapfile -t files < <(zen_files user.js)
+while IFS= read -r line; do
+    saved[$(pref_name "$line")]=user.js
+done < <(read_prefs ${files[@]+"${files[@]}"})
+
+# Update the host's own in place, keeping everything else in the file.
+host_text=
+if [ -f "$host_prefs" ]; then
+    while IFS= read -r line; do
+        if [[ $line != user_pref\(* ]]; then
+            host_text+=$line$'\n'
+            continue
+        fi
+        name=$(pref_name "$line")
+        if [ "${saved[$name]:-}" = user.js ]; then
+            host_text+=$line$'\n'
+            continue
+        fi
+        saved[$name]=1
+        if [ -z "${current[$name]:-}" ]; then
+            echo "Removing $name, which is back at its default; check its comment" >&2
+        elif [ "${current[$name]}" = "${shared[$name]:-}" ]; then
+            echo "Removing $name, which now has the value ${shared_file[$name]} sets" >&2
+        else
+            if [ "${current[$name]}" != "$line" ]; then
+                echo "Changed ${current[$name]}" >&2
+            fi
+            host_text+=${current[$name]}$'\n'
+        fi
+    done <"$host_prefs"
+else
+    host_text="// Zen preferences for $host only, beyond those of the repo root's and its
+// profiles' zen/prefs.js (see lib/zen). Written by update-zen-settings,
+// which keeps comments.
+"
+fi
+
+while IFS= read -r name; do
+    if [ -z "$name" ] || [ -n "${saved[$name]:-}" ]; then
+        continue
+    fi
+    saved[$name]=1
+    if [ -z "${current[$name]:-}" ]; then
+        echo "${shared_file[$name]} sets $name, which is at its default here" >&2
+    elif [ "${current[$name]}" != "${shared[$name]}" ]; then
+        echo "Adding ${current[$name]}, which ${shared_file[$name]} sets otherwise" >&2
+        host_text+=${current[$name]}$'\n'
+    fi
+done < <(printf '%s\n' "${!shared[@]}" | LC_ALL=C sort)
+
+# Globs from every prefs-ignore.txt for this host
+mapfile -t files < <(zen_files prefs-ignore.txt)
+mapfile -t ignore < <(for file in ${files[@]+"${files[@]}"}; do read_list "$file"; done)
+ignored() {
+    local glob
+    for glob in ${ignore[@]+"${ignore[@]}"}; do
+        # shellcheck disable=SC2053  # the glob is meant to match
+        [[ $1 == $glob ]] && return 0
+    done
+    return 1
+}
+
+offered=()
+while IFS= read -r name; do
+    line=${current[$name]}
+    if [ -n "${saved[$name]:-}" ] || ignored "$name" ||
+        grep -qxF "$line" "$defaults/prefs.js"; then
+        continue
+    fi
+    offered+=("$line")
+done < <(printf '%s\n' "${!current[@]}" | LC_ALL=C sort)
+
+new_ignores=()
+if [ ${#offered[@]} -gt 0 ] && [ ! -t 0 ]; then
+    echo "Not saved or ignored yet (run in a terminal to choose):"
+    printf '  %s\n' "${offered[@]}"
+elif [ ${#offered[@]} -gt 0 ]; then
+    echo "${#offered[@]} other preferences are not saved or ignored yet."
+    for line in "${offered[@]}"; do
+        echo
+        # Some are long JSON blobs; the start is enough to choose.
+        if [ ${#line} -gt 200 ]; then
+            echo "${line:0:200}..."
+        else
+            echo "$line"
+        fi
+        read -r -p "[s]ave, [i]gnore from now on, or skip for now? [s/i/N] " answer
+        case $answer in
+        s | S)
+            read -r -p "Comment (Enter for none): " comment
+            if [ -n "$comment" ]; then
+                host_text+="// $comment"$'\n'
+            fi
+            host_text+=$line$'\n'
+            ;;
+        i | I)
+            new_ignores+=("$(pref_name "$line")")
+            ;;
+        esac
+    done
+    echo
+fi
+
+printf '%s' "$host_text" | write_host_file "$host_prefs"
+mapfile -t host_lines < <(pref_lines "$host_prefs" 2>/dev/null)
+if [ ${#host_lines[@]} -gt 0 ]; then
+    printf '%s\n' "${host_lines[@]}" | also_listed prefs.js pref_lines 's/^user_pref("\([^"]*\)".*/\1/'
+fi
+
+if [ ${#new_ignores[@]} -gt 0 ]; then
+    {
+        if [ -f "$host_ignore" ]; then
+            cat "$host_ignore"
+        else
+            cat <<EOF
+# Zen preferences that update-zen-settings never offers to save on $host,
+# beyond those in the repo root's and its profiles' zen/prefs-ignore.txt: one
+# name or shell-style glob (*, ?, [...]) per line, with # comments.
+
+EOF
+        fi
+        printf '%s\n' "${new_ignores[@]}"
+    } | write_host_file "$host_ignore"
+    printf '%s\n' "${new_ignores[@]}" | also_listed prefs-ignore.txt read_list 's/^//'
+fi

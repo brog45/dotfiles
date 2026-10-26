@@ -1,0 +1,36 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Set the keyboard shortcuts, preferences and theme saved for this host (see
+# lib/zen) in the Zen browser flatpak, with the zen-settings script from this
+# host's stow/bin/ trees (see there). While Zen is running, it leaves them for
+# a new shell to set once Zen is closed.
+
+repo_root=$(dirname "$(dirname "$(readlink -f "$0")")")
+# shellcheck source=lib/host-lists
+. "$repo_root/lib/host-lists"
+
+if ! flatpak info app.zen_browser.zen >/dev/null 2>&1; then
+    echo "The Zen flatpak is not installed; skipping"
+    exit 0
+fi
+
+# Run it from the repo, so this works before install-stow has linked it. A
+# file may be in only one stow/ tree (see install-stow).
+script=
+for dir in "${list_dirs[@]}"; do
+    if [ -x "$dir/stow/bin/zen-settings" ]; then
+        script=$dir/stow/bin/zen-settings
+    fi
+done
+if [ -z "$script" ]; then
+    echo "None of $host's stow/ trees has bin/zen-settings; skipping the Zen settings"
+    exit 0
+fi
+
+if ! command -v jq >/dev/null; then
+    sudo apt install -y jq
+fi
+
+exec "$script"

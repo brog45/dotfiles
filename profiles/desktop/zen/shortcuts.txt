@@ -1,0 +1,7 @@
+# Zen keyboard shortcuts for hosts with the desktop profile: each one's ID,
+# then its keys (see lib/zen). update-zen-settings saves a host's own to
+# hosts/<host>/zen/shortcuts.txt; move them here by hand to share them.
+
+key_quitApplication                      none
+zen-workspace-backward                   Alt+Shift+VK_LEFT
+zen-workspace-forward                    Alt+Shift+VK_RIGHT

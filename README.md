@@ -129,6 +129,39 @@ machine's profiles or `hosts/<hostname>/`, the host's winning. A leading `~`
 means your home directory. The picture stays out of the repo, so the step
 skips with a warning until it exists. The `desktop` profile has one.
 
+## Zen browser settings
+
+The `zen-settings` setup step sets the keyboard shortcuts, preferences and
+theme saved in `zen/` in every Zen profile. Like the lists, `zen/` can be at
+the repo root, in a profile or in `hosts/<hostname>/`, and where more than
+one sets the same shortcut or preference, the host's wins over its
+profiles', which win over the root's. Each `zen/` may have a
+`shortcuts.txt`, a `prefs.js`, a `user.js` and a `prefs-ignore.txt`
+(`lib/zen` describes them); the `desktop` profile has all four.
+
+Each setting is set once, like changing it in Zen's settings, so it can
+still be changed there. The exception is `user.js`, which goes in the
+profile's `user.js`: Zen applies it on every start, so those choices hold
+even if Zen's defaults change, and a change in Zen's settings lasts only
+until it restarts. A preference whose value is Zen's default belongs there,
+since Zen drops it from `prefs.js`. Zen overwrites them while it is running, and has no
+profile until it first starts, so then the step leaves them pending, and
+`~/.bashrc.d` sets them in the first new shell after Zen is closed. The
+`zen-settings` script (stowed from the `desktop` profile) does the same by
+hand.
+
+After changing a shortcut or setting in Zen, run `./update-zen-settings` to
+save them. Like the other update scripts, it writes only
+`hosts/<hostname>/zen/`: what differs from what the root and profiles set.
+To learn Zen's default shortcuts, it starts Zen once on a throwaway profile,
+without a window, after each Zen update. It updates the values in the
+host's `prefs.js`, and removes the ones back at their defaults or at the
+shared value. Most of the other preferences Zen saves are its own state, so
+it asks about each one not saved yet or matched by a `prefs-ignore.txt`:
+save it, ignore it from then on, or ask again next time. It points out
+settings another host saved too; to share them, move them to a profile or
+the root by hand.
+
 ## Updating the lists
 
 Each list `setup` installs from comes in up to three parts:

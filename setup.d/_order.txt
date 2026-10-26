@@ -27,6 +27,7 @@ install-vscode-extensions
 install-claude-cli
 rustup
 zen-keepassxc
+zen-settings
 keepassxc-autostart
 update-alternatives
 keyboard-shortcuts

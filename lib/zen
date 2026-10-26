@@ -1,0 +1,120 @@
+# shellcheck shell=bash
+# Sourced by zen-settings (in a stow/bin/ tree), which sets the Zen browser
+# settings saved in the dotfiles, and update-zen-settings, which saves them.
+# The sourcing script must set repo_root.
+#
+# The settings are in zen/ in any of the directories lib/host-lists reads
+# lists from: the repo root (every host), this host's profiles and
+# hosts/<host>/. Each zen/ may have any of:
+#
+#   shortcuts.txt     keyboard shortcuts, one per line: the shortcut's ID in
+#                     Zen's zen-keyboard-shortcuts.json, then its keys, such
+#                     as Accel+Shift+l or Alt+VK_LEFT, or "none" for one that
+#                     was cleared. The modifiers are Accel (Ctrl, here),
+#                     Control, Meta, Alt and Shift; a key name starting with
+#                     VK_ is a key code. Lines starting with # are comments.
+#   prefs.js          preferences as Zen writes them in a profile's prefs.js,
+#                     one user_pref(...) per line, with // comments. The
+#                     theme is set from extensions.activeThemeID.
+#   user.js           preferences in the same form that Zen sets on every
+#                     start, from the profile's user.js: for a choice to keep
+#                     even if Zen's default changes. Zen drops a pref in
+#                     prefs.js that has its default value, so one that does
+#                     goes here. A change in Zen's settings lasts until Zen
+#                     restarts.
+#   prefs-ignore.txt  preferences update-zen-settings never offers to save,
+#                     one name or shell-style glob (*, ?, [...]) per line,
+#                     with # comments
+#
+# Where more than one sets a shortcut or preference, the last one wins: a
+# profile's override the root's, and the host's override both.
+
+# shellcheck source=lib/host-lists
+# shellcheck disable=SC2154  # repo_root is set by the sourcing script
+. "$repo_root/lib/host-lists"
+
+# shellcheck disable=SC2034  # these are for the sourcing scripts
+{
+    zen_app=app.zen_browser.zen
+    zen_root=$HOME/.var/app/$zen_app/.zen
+}
+
+# Print this host's zen/NAME files that exist, in list_dirs order.
+#   zen_files prefs.js
+zen_files() {
+    local dir
+    for dir in "${list_dirs[@]}"; do
+        if [ -f "$dir/zen/$1" ]; then
+            printf '%s\n' "$dir/zen/$1"
+        fi
+    done
+}
+
+# Print each Zen profile that Zen has started in, which has both files;
+# profiles.ini may list others it never used.
+zen_profiles() {
+    local dir
+    for dir in "$zen_root"/*/; do
+        if [ -f "$dir/prefs.js" ] && [ -f "$dir/zen-keyboard-shortcuts.json" ]; then
+            printf '%s\n' "${dir%/}"
+        fi
+    done
+}
+
+zen_running() {
+    flatpak ps --columns=application | grep -qx "$zen_app"
+}
+
+# jq functions for a shortcut's keys. keys_text turns a shortcut, as in
+# zen-keyboard-shortcuts.json, into its keys as in zen/shortcuts.txt;
+# parse_keys turns them back, with the modifiers that are on as a list.
+# read_shortcuts reads zen/shortcuts.txt lines (jq -R -s) into an object of
+# keys by ID, so later lines for an ID win.
+# shellcheck disable=SC2016,SC2034
+zen_keys_jq='
+def keys_text:
+    [(["accel", "control", "meta", "alt", "shift"][] as $m
+        | select(.modifiers[$m]) | ($m[:1] | ascii_upcase) + $m[1:]),
+     (if (.key // "") != "" then .key | ascii_downcase
+      elif (.keycode // "") != "" then .keycode
+      else empty end)]
+    | if length == 0 or (last | test("^(Accel|Control|Meta|Alt|Shift)$"))
+      then "none" else join("+") end;
+def parse_keys:
+    if . == "none" then {key: "", keycode: "", modifiers: []}
+    else capture("^(?<m>((Accel|Control|Meta|Alt|Shift)\\+)*)(?<k>.+)$")
+        | {key: (if .k | startswith("VK_") then "" else .k end),
+           keycode: (if .k | startswith("VK_") then .k else "" end),
+           modifiers: [.m | splits("\\+") | select(. != "") | ascii_downcase]}
+    end;
+def read_shortcuts:
+    [splits("\n") | select(test("^\\s*(#|$)") | not)
+     | [splits("\\s+") | select(. != "")]
+     | {(.[0]): .[1]}] | add // {};
+'
+
+# Print the shortcuts saved in the given zen/shortcuts.txt files, merged into
+# one object of keys (as in the files) by ID.
+read_shortcuts() {
+    cat "$@" /dev/null | jq -R -s "$zen_keys_jq read_shortcuts"
+}
+
+# Print the user_pref lines in a prefs.js.
+pref_lines() {
+    grep '^user_pref(' "$1" || true
+}
+
+# Print a user_pref line's name.
+pref_name() {
+    local name=${1#user_pref(\"}
+    printf '%s\n' "${name%%\"*}"
+}
+
+# Print the user_pref lines in the given prefs.js files, keeping only the
+# last for each name.
+read_prefs() {
+    local file
+    for file in "$@"; do
+        pref_lines "$file"
+    done | tac | awk -F'"' '!seen[$2]++' | tac
+}

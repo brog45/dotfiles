@@ -1,0 +1,101 @@
+# Zen preferences that update-zen-settings never offers to save on hosts
+# with the desktop profile: its own state rather than settings. One name or
+# shell-style glob (*, ?, [...]) per line, matched against the whole name;
+# text after # is ignored.
+
+# Timestamps, counters, IDs and caches
+accessibility.typeaheadfind.flashBar
+app.normandy.*
+app.update.lastUpdateTime.*
+browser.bookmarks.editDialog.*
+browser.bookmarks.restore_default_bookmarks
+browser.contextual-services.contextId*
+browser.download.lastDir
+browser.download.panel.shown
+browser.download.viewableInternally.typeWasRegistered.*
+browser.engagement.*
+browser.laterrun.*
+browser.newtabpage.activity-stream.impressionId
+browser.newtabpage.activity-stream.*.migrated
+browser.newtabpage.storageVersion
+browser.pageActions.persistedActions
+browser.preferences.experimental.hidden
+browser.region.*
+browser.rights.*
+browser.safebrowsing.provider.*
+browser.search.totalSearches
+browser.sessionstore.upgradeBackup.*
+browser.startup.homepage_override.*
+browser.startup.lastColdStartupCheck
+browser.urlbar.lastUrlbarSearchSeconds
+browser.urlbar.placeholderName*
+browser.urlbar.quicksuggest.migrationVersion
+browser.urlbar.recentsearches.*
+captchadetection.*
+datareporting.*
+dom.push.userAgentID
+dom.security.https_only_mode_ever_enabled
+extensions.blocklist.*
+extensions.colorway-*
+extensions.quarantinedDomains.list
+extensions.ui.*
+extensions.webextensions.ExtensionStorageIDB.migrated.*
+extensions.webextensions.uuids
+gecko.handlerService.*
+idle.*
+media.gmp-*
+media.videocontrols.picture-in-picture.video-toggle.first-seen-secs
+nimbus.firstUpdateComplete
+nimbus.migrations.*
+nimbus.profileId
+pdfjs.featuresNotificationImpressionCount
+pdfjs.migrationVersion
+places.database.*
+privacy.globalprivacycontrol.was_ever_enabled
+privacy.purge_trackers.*
+privacy.sanitize.pending
+privacy.sanitize.clearOnShutdown.hasMigratedToNewPrefs*
+privacy.trackingprotection.allow_list.hasMigratedCategoryPrefs
+privacy.trackingprotection.allow_list.hasUserInteractedWithETPSettings
+services.settings.*
+sidebar.backupState
+signon.storage.rust.*
+storage.vacuum.*
+toolkit.profiles.*
+toolkit.startup.*
+toolkit.telemetry.*
+zen.library.last-tab
+zen.mods.*
+zen.updates.*
+zen.urlbar.suggestions-learner
+zen.workspaces.active
+
+# DNS over HTTPS as Mozilla rolls it out; your own choice is network.trr.mode
+doh-rollout.*
+
+# Set by the Firefox Containers and Containerise extensions
+privacy.userContext.extension
+
+# The Firefox account and Sync's own state. Which engines to sync
+# (services.sync.engine.*, services.sync.declinedEngines) are offered.
+identity.fxaccounts.*
+services.sync.*lastSync*
+services.sync.*syncID
+services.sync.client.*
+services.sync.clients.*
+services.sync.engine.prefs.modified
+services.sync.globalScore
+services.sync.lastPing
+services.sync.lastTabFetch
+services.sync.nextSync
+services.sync.prefs.sync-seen.*
+services.sync.syncInterval
+services.sync.syncThreshold
+services.sync.username
+
+# Developer tools' panel sizes and last dock position
+devtools.everOpened
+devtools.toolbox.previousHost
+devtools.toolbox.sidebar.width
+devtools.toolsidebar-*
+browser.bookmarks.showMobileBookmarks
