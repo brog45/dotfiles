@@ -2,8 +2,6 @@
 
 set -euo pipefail
 
-sudo apt install -y curl
-
 # Install FiraCode Nerd Font for the current user (alacritty uses it).
 
 font='FiraCode Nerd Font'
@@ -13,6 +11,10 @@ font_dir=~/.local/share/fonts/FiraCodeNerdFont
 if [ -n "$(fc-list "$font" family)" ]; then
     echo "$font is already installed"
     exit 0
+fi
+
+if ! command -v curl >/dev/null; then
+    sudo apt install -y curl
 fi
 
 tmp=$(mktemp -d)
