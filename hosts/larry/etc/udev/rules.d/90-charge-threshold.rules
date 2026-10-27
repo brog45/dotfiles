@@ -1,8 +1,12 @@
 # Stop charging at 50% and resume below 45%. Easier on the battery, and with
 # the charger out of reach it caps how long larry can be used at night.
 # Start is set before end because thinkpad_acpi rejects a start above end.
+# CHARGE_LIMIT overrides UPower's hwdb default (75,80), so turning on GNOME's
+# Preserve Battery Health applies these limits too. Turning it off still
+# writes 0/100 until the next boot or udev change event.
 # Raise until reboot with:
 #   echo 100 | sudo tee /sys/class/power_supply/BAT0/charge_control_end_threshold
 ACTION=="add|change", SUBSYSTEM=="power_supply", KERNEL=="BAT0", \
     ATTR{charge_control_start_threshold}="45", \
-    ATTR{charge_control_end_threshold}="50"
+    ATTR{charge_control_end_threshold}="50", \
+    ENV{CHARGE_LIMIT}="45,50"
