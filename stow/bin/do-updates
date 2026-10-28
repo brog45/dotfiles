@@ -4,6 +4,6 @@ set -euo pipefail
 
 sudo apt update
 sudo apt full-upgrade --auto-remove
-flatpak update --system -y
+sudo flatpak update --system -y
 flatpak update --user -y
 
