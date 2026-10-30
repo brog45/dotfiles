@@ -5,10 +5,11 @@
 # A fake ssh runs jeeves's commands against the first. Checks pairing the
 # devices, joining jeeves's folders by label, asking before merging a folder
 # that has files, rerunning, refusing a folder already synced under another ID,
-# and adding the .git and node_modules ignore patterns, keeping any others, on
-# both machines and away from home. Needs Syncthing, jq and curl installed;
-# needs no root, and runs in about 8 seconds. The instances only listen on
-# localhost and announce nothing.
+# adding the .git and node_modules ignore patterns, keeping any others, on both
+# machines and away from home, and restricting Syncthing to the LAN and Tailscale.
+# Needs Syncthing, jq and curl installed; needs no root, and runs in about 8
+# seconds. The instances only listen on localhost and announce nothing: their
+# global discovery server is unreachable, for when the test turns discovery on.
 #
 # Usage: tests/syncthing-test
 
@@ -85,6 +86,7 @@ generate() {
     local config=$1/.local/state/syncthing/config.xml
     HOME=$1 syncthing generate --no-default-folder >/dev/null 2>&1
     sed -i -e 's|<listenAddress>default<|<listenAddress>tcp://127.0.0.1:0<|' \
+        -e 's|<globalAnnounceServer>default<|<globalAnnounceServer>https://127.0.0.1:1/<|' \
         -e 's|<\(globalAnnounceEnabled\|localAnnounceEnabled\|relaysEnabled\|natEnabled\)>true<|<\1>false<|' \
         "$config"
 }
@@ -136,7 +138,26 @@ cat > "$work/bin/getent" <<'EOF'
 [ -z "${AWAY:-}" ] || exit 2
 echo "127.0.0.1 jeeves.lan"
 EOF
-chmod +x "$work/bin/ssh" "$work/bin/getent"
+# A fake ip, so the home LAN is the same on any machine. With $NO_ROUTE set,
+# there is no default route.
+cat > "$work/bin/ip" <<'EOF'
+#!/usr/bin/bash
+if [ -n "${NO_ROUTE:-}" ]; then
+    echo '[]'
+elif [[ " $* " == *" default "* ]]; then
+    echo '[{"dst":"default","gateway":"10.9.8.1","dev":"eth9"}]'
+else
+    echo '[{"dst":"10.9.8.0/24","dev":"eth9","protocol":"kernel","scope":"link"}]'
+fi
+EOF
+# A fake tailscale, so the tailnet is the same on any machine. With $NO_TAILNET
+# set, it is not running.
+cat > "$work/bin/tailscale" <<'EOF'
+#!/usr/bin/bash
+[ -z "${NO_TAILNET:-}" ] || exit 1
+echo '{"MagicDNSSuffix":"tailnet.example.ts.net"}'
+EOF
+chmod +x "$work/bin/ssh" "$work/bin/getent" "$work/bin/ip" "$work/bin/tailscale"
 
 # A copy of the repo, as the host "test" with one profile.
 dotfiles=$work/repo
@@ -192,6 +213,32 @@ set_ignores() {
 # The ignore patterns the step adds, one per line.
 added=$'(?d).git\n(?d)node_modules'
 
+# A field of a device in an instance's config, as compact JSON.
+#   device_field INSTANCE DEVICE FIELD
+device_field() { "$1" config devices "$2" dump-json 2>/dev/null | jq -c ".$3"; }
+# The networks the step allows, and the addresses it leaves on a device.
+networks='["10.9.8.0/24","100.64.0.0/10","fd7a:115c:a1e0::/48"]'
+addresses() { printf '["dynamic","tcp://%s.tailnet.example.ts.net:22000"]' "$1"; }
+# Turn on what the step turns off, as on a machine it has not run on.
+#   open_options INSTANCE
+open_options() {
+    local option
+    for option in global-ann-enabled relays-enabled natenabled; do
+        "$1" config options "$option" set true
+    done
+}
+#   options_closed INSTANCE
+options_closed() {
+    [ "$("$1" config options global-ann-enabled get)" = false ] &&
+        [ "$("$1" config options relays-enabled get)" = false ] &&
+        [ "$("$1" config options natenabled get)" = false ]
+}
+# A new device's ID, from a throwaway home.
+new_device_id() {
+    HOME=$work/$1 syncthing generate --no-default-folder 2>&1 |
+        grep -oEm1 '[A-Z0-9]{7}(-[A-Z0-9]{7}){7}'
+}
+
 run n
 client_id=$(client show system 2>/dev/null | jq -r .myID)
 check 'first run succeeds' [ "$rc" -eq 0 ]
@@ -200,6 +247,12 @@ check 'adds the autostart entry' \
     cmp -s /usr/share/applications/syncthing-start.desktop "$client_home/.config/autostart/syncthing-start.desktop"
 check 'adds jeeves as an introducer' [ "$(client config devices "$hub_id" introducer get 2>/dev/null)" = true ]
 check 'adds the machine to jeeves' [ "$(hub config devices "$client_id" name get 2>/dev/null)" = test ]
+check 'limits jeeves to the LAN and Tailscale' [ "$(device_field client "$hub_id" allowedNetworks)" = "$networks" ]
+check 'and adds its tailnet address' [ "$(device_field client "$hub_id" addresses)" = "$(addresses jeeves)" ]
+check 'and says so' has '^Restricting jeeves to the LAN and Tailscale$'
+check 'jeeves limits the machine too' [ "$(device_field hub "$client_id" allowedNetworks)" = "$networks" ]
+check 'and adds its tailnet address' [ "$(device_field hub "$client_id" addresses)" = "$(addresses test)" ]
+check 'but not itself' [ "$(device_field client "$client_id" allowedNetworks)" = '[]' ]
 check 'the empty Music joins without asking' [ "$(grep -c 'is not synced yet' <<<"$out")" -eq 1 ]
 check 'Music is joined by label, at ~/Music' [ "$(folder_path client music-1)" = '~/Music' ]
 check 'jeeves shares Music' grep -qxF "$client_id" <<<"$(folder_devices hub music-1)"
@@ -225,7 +278,21 @@ run
 check 'rerun succeeds' [ "$rc" -eq 0 ]
 check 'rerun starts nothing' lacks 'Starting'
 check 'rerun asks nothing' lacks 'is not synced yet'
-check 'rerun adds nothing' lacks 'Adding|Sharing|Ignoring'
+check 'rerun adds nothing' lacks 'Adding|Sharing|Ignoring|Restricting|Turned off'
+
+# As set up before the step restricted networks, with another address and
+# network that stay.
+open_options client
+client config devices "$hub_id" addresses add tcp://10.0.0.1:22000
+client config devices "$hub_id" allowed-networks add 10.0.0.0/8
+run
+check 'rerun with discovery on succeeds' [ "$rc" -eq 0 ]
+check 'turns off discovery, relays and NAT' options_closed client
+check 'and says so' has "^Turned off Syncthing's global discovery, relays and NAT port mapping$"
+check 'keeps an address it did not add' \
+    grep -qF tcp://10.0.0.1:22000 <<<"$(device_field client "$hub_id" addresses)"
+check 'keeps a network it did not add' \
+    grep -qF 10.0.0.0/8 <<<"$(device_field client "$hub_id" allowedNetworks)"
 
 # As set up before the step added ignore patterns: other patterns, a comment,
 # and one of the two.
@@ -238,20 +305,60 @@ check 'after the ones there, which are kept' \
 
 # Away from home, the folders synced already still get them.
 set_ignores "$client_home" music-1
+laptop_id=$(new_device_id laptop)
+client config devices add --device-id "$laptop_id" --name laptop
+open_options client
 AWAY=1 run
 check 'away from home succeeds' [ "$rc" -eq 0 ]
 check 'and skips pairing' has 'not found \(not on the home network\?\)'
 check 'but adds the ignore patterns' [ "$(folder_ignores "$client_home" music-1)" = "$added" ]
+check 'and turns off discovery, relays and NAT' options_closed client
+check 'but leaves the devices, without the home LAN to look up' [ "$(device_field client "$laptop_id" allowedNetworks)" = '[]' ]
+
+# Back home, the home LAN comes from jeeves, and a device left over is restricted.
+run
+check 'back home succeeds' [ "$rc" -eq 0 ]
+check 'and restricts the device' [ "$(device_field client "$laptop_id" allowedNetworks)" = "$networks" ]
+
+# Without the home LAN to allow, the step stops.
+NO_ROUTE=1 run
+check 'no route on jeeves fails' [ "$rc" -ne 0 ]
+check 'and says why' has "^Cannot find the home LAN's network on jeeves$"
+
+# Without the tailnet's name, a device is limited but gets no address on it,
+# until a rerun finds the name.
+desk_id=$(new_device_id desk)
+client config devices add --device-id "$desk_id" --name desk
+NO_TAILNET=1 run
+check 'no tailnet on jeeves succeeds' [ "$rc" -eq 0 ]
+check 'and warns' has "^Warning: cannot find the tailnet's name on jeeves"
+check 'and still limits the device' [ "$(device_field client "$desk_id" allowedNetworks)" = "$networks" ]
+check 'but adds no address' [ "$(device_field client "$desk_id" addresses)" = '["dynamic"]' ]
+run
+check 'a rerun adds the address' [ "$(device_field client "$desk_id" addresses)" = "$(addresses desk)" ]
+
+# Devices jeeves has that were not set up by the step: one whose name differs in
+# case from its hostname, and one whose name cannot be a hostname.
+phone_id=$(new_device_id phone)
+tablet_id=$(new_device_id tablet)
+hub config devices add --device-id "$phone_id" --name Zehn
+hub config devices add --device-id "$tablet_id" --name 'Some Tablet'
+open_options hub
 
 # On jeeves, the listed folders get them, by label; the others are left alone.
 run_hub
 check 'jeeves succeeds' [ "$rc" -eq 0 ]
+check 'jeeves turns off discovery, relays and NAT' options_closed hub
+check 'and limits its other devices' [ "$(device_field hub "$phone_id" allowedNetworks)" = "$networks" ]
+check 'with their names lowercased in the address' [ "$(device_field hub "$phone_id" addresses)" = "$(addresses zehn)" ]
+check 'a name that cannot be a hostname gets no address' [ "$(device_field hub "$tablet_id" addresses)" = '["dynamic"]' ]
+check 'but is still limited' [ "$(device_field hub "$tablet_id" allowedNetworks)" = "$networks" ]
 check 'and pairs nothing' has '^This is jeeves, the hub; no folders to pair$'
 check 'its Music ignores .git and node_modules' [ "$(folder_ignores "$hub_home" music-1)" = "$added" ]
 check 'named by its path' has '^Ignoring .* in ~/music-elsewhere$'
 check 'an unlisted folder gets no ignores' [ -z "$(folder_ignores "$hub_home" other-1)" ]
 run_hub
-check 'jeeves rerun adds nothing' lacks 'Ignoring'
+check 'jeeves rerun adds nothing' lacks 'Ignoring|Restricting|Turned off'
 
 # A folder at a listed path, synced under another ID.
 client config folders add --id pics-9 --label Pictures --path '~/Pictures'

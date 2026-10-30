@@ -13,9 +13,13 @@ set -euo pipefail
 # with jeeves's, and a file that differs on both sides is kept as a
 # .sync-conflict copy. Nothing is ever deleted. Each folder, on jeeves too,
 # ignores .git and node_modules directories: the patterns for them are added to
-# its ignore patterns if missing, after any it has, which are kept. If this
-# machine's record of what jeeves has looks out of date, it offers to have
-# every connected machine send its full index again.
+# its ignore patterns if missing, after any it has, which are kept. Syncthing
+# connects only over the home LAN and Tailscale: global discovery, relays and
+# NAT port mapping are turned off, and each other device in its config, on
+# jeeves too, is limited to those networks and given its address on the tailnet.
+# The LAN's network and the tailnet's name are looked up on jeeves, so away from
+# home the devices are left for a rerun from home. If this machine's record of what jeeves has looks out of date, it offers to
+# have every connected machine send its full index again.
 
 script=$(readlink -f "$0")
 repo_root=$(dirname "$(dirname "$script")")
@@ -126,9 +130,110 @@ folder_by_path() {
         'first(.folders[] | select((.path | sub("^~"; $home) | rtrimstr("/")) == ($p | rtrimstr("/"))) | .id)' <<<"$1"
 }
 
+# Tailscale's IPv4 and IPv6 ranges. The IPv6 one is not this LAN's or specific
+# to this tailnet: Tailscale documents it publicly
+# (https://tailscale.com/kb/1015/100.x-addresses), so it is not a secret.
+tailscale_networks=(100.64.0.0/10 fd7a:115c:a1e0::/48)
+
+# The network of this machine's default route. Run on jeeves, which is always at
+# home, to find the home LAN: this machine may be on someone else's network.
+home_lan() {
+    local dev
+    dev=$(ip -j -4 route show default | jq -r '.[0].dev // empty')
+    if [ -n "$dev" ]; then
+        ip -j -4 route show dev "$dev" proto kernel scope link | jq -r '.[0].dst // empty'
+    fi
+}
+
+# The tailnet's DNS domain, which is private and so not kept in this repo. Run
+# on jeeves too: this machine may not be on Tailscale yet. Prints nothing if
+# jeeves is not on it.
+tailnet_domain() {
+    tailscale status --json 2>/dev/null | jq -r '.MagicDNSSuffix // empty'
+}
+
+# Set the domain of the devices' addresses on the tailnet. Without one, they get
+# no such address until a rerun finds it.
+#   set_tailnet DOMAIN
+set_tailnet() {
+    tailnet=$1
+    if [ -z "$tailnet" ]; then
+        echo "Warning: cannot find the tailnet's name on $hub; adding no addresses on it" >&2
+    fi
+}
+
+# Set the networks Syncthing may use: the home LAN and Tailscale.
+#   set_allowed_networks HOME-LAN
+set_allowed_networks() {
+    if [ -z "$1" ]; then
+        echo "Cannot find the home LAN's network on $hub" >&2
+        exit 1
+    fi
+    allowed_networks=("$1" "${tailscale_networks[@]}")
+}
+
+# Turn off the ways of reaching a device outside the allowed networks.
+restrict_options() {
+    local option changed=
+    for option in global-ann-enabled relays-enabled natenabled; do
+        if [ "$(syncthing cli config options "$option" get)" != false ]; then
+            syncthing cli config options "$option" set false
+            changed=1
+        fi
+    done
+    if [ -n "$changed" ]; then
+        echo "Turned off Syncthing's global discovery, relays and NAT port mapping"
+    fi
+}
+
+# Run `syncthing cli` on this machine, for restrict_device.
+on_self() {
+    syncthing cli "$@"
+}
+
+# Limit a device to $allowed_networks, and add its address on the tailnet, unless
+# the tailnet is unknown or its name cannot be a hostname. Its other addresses
+# stay: with global discovery off, dynamic finds it only on the LAN. CLI is
+# on_self or on_hub.
+#   restrict_device CLI ID NAME
+restrict_device() {
+    local cli=$1 id=$2 name=$3 device address network changed=
+    device=$("$cli" config devices "$id" dump-json)
+    if [ -n "$tailnet" ] && [[ ${name,,} =~ ^[a-z0-9-]+$ ]]; then
+        address=tcp://${name,,}.$tailnet:22000
+        if ! jq -e --arg a "$address" 'any(.addresses[]; . == $a)' <<<"$device" >/dev/null; then
+            "$cli" config devices "$id" addresses add "$address"
+            changed=1
+        fi
+    fi
+    for network in "${allowed_networks[@]}"; do
+        if ! jq -e --arg n "$network" 'any((.allowedNetworks // [])[]; . == $n)' <<<"$device" >/dev/null; then
+            "$cli" config devices "$id" allowed-networks add "$network"
+            changed=1
+        fi
+    done
+    if [ -n "$changed" ]; then
+        echo "Restricting $name to the LAN and Tailscale"
+    fi
+}
+
 my_config=$(syncthing cli config dump-json)
+my_id=$(syncthing cli show system | jq -r .myID)
+
+# Restrict every other device in this machine's config.
+restrict_devices() {
+    local id name
+    while IFS=$'\t' read -r id name; do
+        restrict_device on_self "$id" "$name"
+    done < <(jq -r --arg me "$my_id" '.devices[] | select(.deviceID != $me) | [.deviceID, .name] | @tsv' <<<"$my_config")
+}
+
+restrict_options
 
 if [ "$host" = "$hub" ]; then
+    set_allowed_networks "$(home_lan)"
+    set_tailnet "$(tailnet_domain)"
+    restrict_devices
     for path in "${folders[@]}"; do
         label=$(basename "$path")
         if ! id=$(folder_by_label "$my_config" "$label"); then
@@ -171,12 +276,21 @@ on_hub_api() {
         "$(declare -f st_api_init st_api); st_api_init && st_api $(printf '%q' "$1")"
 }
 
+# Run one of this script's functions on jeeves, sending it along.
+#   on_hub_function NAME
+on_hub_function() {
+    ssh -n -o BatchMode=yes "$hub_host" "$(declare -f "$1"); $1"
+}
+
 if ! hub_id=$(on_hub show system | jq -r .myID); then
     echo "Syncthing is not running on $hub" >&2
     exit 1
 fi
-my_id=$(syncthing cli show system | jq -r .myID)
 hub_config=$(on_hub config dump-json)
+
+set_allowed_networks "$(on_hub_function home_lan)"
+set_tailnet "$(on_hub_function tailnet_domain)"
+restrict_devices
 
 #   has_device "$config" DEVICE
 has_device() {
@@ -199,6 +313,8 @@ if ! has_device "$my_config" "$hub_id"; then
 else
     syncthing cli config devices "$hub_id" introducer set true
 fi
+restrict_device on_hub "$my_id" "$host"
+restrict_device on_self "$hub_id" "$hub"
 
 # Ask a question on the terminal. No answer (no terminal) means no.
 #   ask_yes QUESTION

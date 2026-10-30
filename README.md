@@ -103,8 +103,21 @@ copy. Nothing is ever deleted. Each listed folder ignores `.git` and
 `(?d).git` and `(?d)node_modules` to the folder's ignore patterns when
 missing, after any patterns it has, which are kept. Ignore patterns are per
 machine, so this is done on every machine, jeeves included, on every run. On
-jeeves itself it only does that and starts Syncthing; away from the home
-network it also does it for the folders synced already. A machine's record of
+jeeves itself it only does that, restricts networks as below and starts
+Syncthing; away from the home network it does that for the folders synced
+already. Syncthing connects only over the home LAN and Tailscale: the script
+turns off global discovery, relays and NAT port mapping, limits each other
+device in the config to the home LAN, `100.64.0.0/10` and
+`fd7a:115c:a1e0::/48` (`allowedNetworks`, enforced in both directions), and adds
+`tcp://<name>.<tailnet>.ts.net:22000` beside its `dynamic` address, which then
+finds it only on the LAN. The home LAN's network (that of jeeves's default
+route) and the tailnet's name are looked up on jeeves over SSH, because this
+machine may be on another network or not on Tailscale yet; so away from home
+the options are still turned off, but the devices wait for a rerun from home.
+If jeeves is not on Tailscale, the script warns and adds no such addresses
+until a rerun. A network it added stays if the LAN's changes. A device jeeves
+introduces later gets this on the next run; one that does not run the script,
+such as pinelet or Zehn (Android), has to be set up by hand. A machine's record of
 what jeeves has can go stale, so that the web UI shows jeeves out of sync
 while every folder is up to date, and rescanning or restarting does not help.
 When jeeves is connected, both are idle, and this machine thinks jeeves needs
