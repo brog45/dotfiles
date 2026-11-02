@@ -6,6 +6,7 @@ gedit
 gnome-calculator
 latencytop
 libnss3-tools
+memtest86+
 nautilus
 nautilus-sendto
 network-manager-pptp-gnome
