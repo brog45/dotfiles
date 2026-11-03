@@ -1,0 +1,101 @@
+# Immich photo server on jeeves. Paths, the database password and the
+# Tailscale auth key come from .env, a link to /srv/immich/.env (not
+# committed); run ./init-env to create it. See README.md.
+
+name: immich
+
+services:
+  immich-server:
+    container_name: immich_server
+    image: ghcr.io/immich-app/immich-server:v3
+    volumes:
+      - ${IMMICH_DATA}/library:/data
+      - ${PICTURES_LOCATION}:/mnt/pictures:ro
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      TZ: America/Chicago
+      DB_PASSWORD: ${DB_PASSWORD}
+    depends_on:
+      - redis
+      - database
+    restart: always
+    healthcheck:
+      disable: false
+    user: 1000:1000
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+
+  # Immich's only way in: joins the tailnet as its own machine, "immich", and
+  # serves https://immich.<tailnet>.ts.net with a Tailscale certificate.
+  tailscale:
+    container_name: immich_tailscale
+    image: docker.io/tailscale/tailscale:stable
+    hostname: immich
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_AUTH_ONCE: "true"
+      TS_HOSTNAME: immich
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+    volumes:
+      - ${IMMICH_DATA}/tailscale:/var/lib/tailscale
+      # A directory, not the file, so that edits to it are picked up.
+      - ./tailscale:/config:ro
+    depends_on:
+      - immich-server
+    restart: always
+    security_opt:
+      - no-new-privileges:true
+
+  immich-machine-learning:
+    container_name: immich_machine_learning
+    image: ghcr.io/immich-app/immich-machine-learning:v3
+    volumes:
+      - ${IMMICH_DATA}/ml-model-cache:/cache
+    environment:
+      MACHINE_LEARNING_MODEL_REVISION: v2
+    restart: always
+    healthcheck:
+      disable: false
+    user: 1000:1000
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+
+  redis:
+    container_name: immich_redis
+    image: docker.io/valkey/valkey:9@sha256:418652cfb58ef879d4978c33553735d7147016032d5aefaa14c828e611eb9dfd
+    healthcheck:
+      test: redis-cli ping | grep -q PONG || exit 1
+    volumes:
+      - ${IMMICH_DATA}/redis:/data
+    restart: always
+    user: 1000:1000
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+
+  database:
+    container_name: immich_postgres
+    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0@sha256:bcf63357191b76a916ae5eb93464d65c07511da41e3bf7a8416db519b40b1c23
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_USER: postgres
+      POSTGRES_DB: immich
+      POSTGRES_INITDB_ARGS: --data-checksums
+      DB_STORAGE_TYPE: SSD
+    volumes:
+      - ${IMMICH_DATA}/postgres:/var/lib/postgresql/data
+    shm_size: 128mb
+    restart: always
+    healthcheck:
+      disable: false
+    user: 1000:1000
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW

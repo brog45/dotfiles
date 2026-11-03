@@ -179,6 +179,36 @@ save it, ignore it from then on, or ask again next time. It points out
 settings another host saved too; to share them, move them to a profile or
 the root by hand.
 
+## Immich on jeeves
+
+`hosts/jeeves/immich/compose.yaml` runs the Immich photo server. It is reached
+only over the tailnet, at `https://immich.<tailnet>.ts.net`: a Tailscale
+container in the same compose project joins the tailnet as its own machine,
+`immich`, and serves Immich with a Tailscale HTTPS certificate
+(`tailscale/serve.json`). No port is open on jeeves itself. `setup` does not
+start it, but once started its containers restart at every boot. Its data and
+settings are under `/srv/immich`, outside the repository. The settings are in
+`/srv/immich/.env`, which holds the database password and the Tailscale auth
+key; `.env` next to `compose.yaml` is a link to it, so that `docker compose`
+there finds it. To start it:
+
+```
+cd ~/dotfiles/hosts/jeeves/immich
+./init-env
+# paste a Tailscale auth key after TS_AUTHKEY= in /srv/immich/.env
+docker compose up -d
+```
+
+`init-env` creates the data directories under `/srv/immich` (uploads,
+database, machine-learning cache, Valkey, Tailscale state), owned by you,
+writes `/srv/immich/.env` with a random password if it does not exist yet,
+adds an empty `TS_AUTHKEY` line if it lacks one, and makes the `.env` link.
+Keep `/srv/immich/.env`, and back it up with the data: the database only
+accepts the password it was created with. The auth key is needed only until the
+`immich` machine first logs in; use a tagged key, so that the machine's key
+does not expire. `~/Pictures` is mounted read-only at `/mnt/pictures`, so
+Immich can show it as an external library without copying the originals.
+
 ## Updating the lists
 
 Each list `setup` installs from comes in up to three parts:

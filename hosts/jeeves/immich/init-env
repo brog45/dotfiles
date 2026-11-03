@@ -1,0 +1,56 @@
+#!/bin/bash
+# Set up Immich's data directory, /srv/immich, and the settings file in it,
+# /srv/immich/.env, with a random database password. Links .env here to it, so
+# that docker compose in this directory finds it. The directories are owned by
+# you rather than by root (Docker creates a missing bind-mount directory as
+# root). Never overwrites an existing settings file: the password must stay the
+# one the database was created with. Adds the TS_AUTHKEY line to an older
+# settings file that lacks it.
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+data=/srv/immich
+env=$data/.env
+
+# /srv is root's, so the top data directory needs sudo; the rest can be yours.
+if [[ ! -d $data ]]; then
+    sudo install -d -m 700 -o "$(id -u)" -g "$(id -g)" "$data"
+fi
+mkdir -p "$data"/{library,ml-model-cache,redis,postgres,tailscale}
+echo "data directories are under $data"
+
+umask 077
+if [[ -e $env ]]; then
+    echo "$env exists already; keeping its settings"
+else
+    {
+        echo "# Immich settings for compose.yaml in ~/dotfiles/hosts/jeeves/immich."
+        echo "# Not committed: holds the DB password."
+        echo "IMMICH_DATA=$data"
+        echo "PICTURES_LOCATION=$HOME/Pictures"
+        # Immich allows only A-Za-z0-9 here.
+        echo "DB_PASSWORD=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
+    } >"$env"
+    echo "wrote $env"
+fi
+
+if ! grep -q '^TS_AUTHKEY=' "$env"; then
+    {
+        echo "# Tailscale auth key for the immich machine; only needed until it first"
+        echo "# logs in, after which its state is in IMMICH_DATA/tailscale."
+        echo "TS_AUTHKEY="
+    } >>"$env"
+    echo "added an empty TS_AUTHKEY to $env: paste a key there before starting"
+fi
+
+if [[ -L .env && $(readlink .env) == "$env" ]]; then
+    :
+elif [[ -e .env || -L .env ]]; then
+    echo "error: .env here is not a link to $env; move its settings there and" >&2
+    echo "delete it, then run this again" >&2
+    exit 1
+else
+    ln -s "$env" .env
+    echo "linked .env to $env"
+fi
