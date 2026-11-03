@@ -90,7 +90,11 @@ file.
 
 The `syncthing` setup script adds Syncthing to your startup applications,
 starts it, and syncs the folders listed in `syncthing-folders.txt`, from the
-machine's profiles and `hosts/<hostname>/`, with jeeves, the hub. Each folder
+machine's profiles and `hosts/<hostname>/`, with jeeves, the hub. On jeeves,
+Syncthing starts at boot instead, with nobody logged in: the script enables the
+package's system service for your user (`syncthing@brogers`, logging to the
+journal rather than `syncthing.log`) and removes the autostart entry, first
+stopping any Syncthing that the service did not start. Each folder
 joins jeeves's folder whose label is the directory's name, wherever jeeves
 keeps it. The script adds the machine to jeeves over SSH (with the key from
 `jeeves-ssh-key`) and makes jeeves an introducer, so the other machines that
@@ -103,8 +107,8 @@ copy. Nothing is ever deleted. Each listed folder ignores `.git` and
 `(?d).git` and `(?d)node_modules` to the folder's ignore patterns when
 missing, after any patterns it has, which are kept. Ignore patterns are per
 machine, so this is done on every machine, jeeves included, on every run. On
-jeeves itself it only does that, restricts networks as below and starts
-Syncthing; away from the home network it does that for the folders synced
+jeeves itself it only does that, restricts networks as below and sets up the
+service; away from the home network it does that for the folders synced
 already. Syncthing connects only over the home LAN and Tailscale: the script
 turns off global discovery, relays and NAT port mapping, limits each other
 device in the config to the home LAN, `100.64.0.0/10` and
@@ -220,8 +224,9 @@ needs GNU Stow and takes about a second.
 Syncthing instances, one standing in for jeeves behind a fake `ssh`: pairing
 the devices, joining jeeves's folders by label, asking before merging a folder
 that has files, rerunning, refusing a folder already synced under another
-ID, and adding the ignore patterns, keeping any others, on both machines and
-away from home. It needs Syncthing, `jq` and `curl`, and takes about 8
+ID, adding the ignore patterns, keeping any others, on both machines and away
+from home, and enabling jeeves's system service, behind a fake `sudo` and
+`systemctl`. It needs Syncthing, `jq` and `curl`, and takes about 8
 seconds.
 
 `tests/packages-leaves-docker-test` checks `update-packages-leaves` and

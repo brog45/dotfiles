@@ -2,12 +2,13 @@
 
 set -euo pipefail
 
-# Start Syncthing when you log in, and sync the folders that
-# syncthing-folders.txt in this host's profiles or hosts/<host>/ lists (see
-# lib/host-lists) with jeeves, the hub. Each folder joins jeeves's folder whose
-# label is the directory's name, wherever jeeves keeps it, and jeeves is made
-# an introducer, so the other machines sharing those folders with it are added
-# too. Configures jeeves over SSH, with the key that jeeves-ssh-key authorized.
+# Start Syncthing when you log in (on jeeves, the hub, when it boots, through
+# the package's system service, so that it runs with nobody logged in), and sync
+# the folders that syncthing-folders.txt in this host's profiles or
+# hosts/<host>/ lists (see lib/host-lists) with jeeves. Each folder joins
+# jeeves's folder whose label is the directory's name, wherever jeeves keeps
+# it, and jeeves is made an introducer, so the other machines sharing those
+# folders with it are added too. Configures jeeves over SSH, with the key that jeeves-ssh-key authorized.
 # A folder that is not synced yet but already has files (on a fresh install it
 # is empty) is listed, and joins only if you say so: its files are then merged
 # with jeeves's, and a file that differs on both sides is kept as a
@@ -38,17 +39,26 @@ if ! command -v syncthing >/dev/null; then
     exit 0
 fi
 
-# The entry the package installs for this, copied as is so a later package
-# version cannot leave a stale copy behind unnoticed.
-entry=/usr/share/applications/syncthing-start.desktop
-if [ -f "$entry" ]; then
-    mkdir -p ~/.config/autostart
-    if ! cmp -s "$entry" ~/.config/autostart/syncthing-start.desktop; then
-        cp "$entry" ~/.config/autostart/
-        echo "Syncthing will start when you log in"
+autostart=~/.config/autostart/syncthing-start.desktop
+if [ "$host" = "$hub" ]; then
+    # The system service starts it here, so logging in must not start another.
+    if [ -e "$autostart" ]; then
+        rm "$autostart"
+        echo "Syncthing will no longer start when you log in"
     fi
 else
-    echo "Warning: no $entry; add Syncthing to your startup applications by hand" >&2
+    # The entry the package installs for this, copied as is so a later package
+    # version cannot leave a stale copy behind unnoticed.
+    entry=/usr/share/applications/syncthing-start.desktop
+    if [ -f "$entry" ]; then
+        mkdir -p ~/.config/autostart
+        if ! cmp -s "$entry" "$autostart"; then
+            cp "$entry" ~/.config/autostart/
+            echo "Syncthing will start when you log in"
+        fi
+    else
+        echo "Warning: no $entry; add Syncthing to your startup applications by hand" >&2
+    fi
 fi
 
 # Wait up to 30 seconds for Syncthing to answer.
@@ -70,10 +80,44 @@ start_syncthing() {
     wait_ready
 }
 
+# Shut Syncthing down, and wait for it to let go of its database: starting
+# another before then fails. The process holding it is the one serving the GUI.
+stop_syncthing() {
+    local pid _
+    pid=$(ss -Hltnp "sport = :${st_gui_url##*:}" | grep -om1 'pid=[0-9]*' | cut -d= -f2)
+    if [ -z "$pid" ]; then
+        echo "Cannot find the Syncthing serving ${st_gui_url#*//}" >&2
+        return 1
+    fi
+    syncthing cli operations shutdown >/dev/null
+    for _ in $(seq 30); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            return 0
+        fi
+        sleep 1
+    done
+    echo "Syncthing did not shut down" >&2
+    return 1
+}
+
 # Start Syncthing now too, so it can be configured. On the first start, make
 # its keys and config first, without the default ~/Sync folder; this keeps any
 # that exist.
-if ! syncthing cli show system >/dev/null 2>&1; then
+if [ "$host" = "$hub" ]; then
+    service=syncthing@$(id -un).service
+    if ! systemctl is-enabled --quiet "$service" || ! systemctl is-active --quiet "$service"; then
+        # One started some other way would keep the service from starting.
+        if ! systemctl is-active --quiet "$service" && syncthing cli show system >/dev/null 2>&1; then
+            echo "Stopping the Syncthing that $service did not start"
+            st_api_init
+            stop_syncthing
+        fi
+        syncthing generate --no-default-folder
+        echo "Starting Syncthing, and whenever $hub boots"
+        sudo systemctl enable --now "$service"
+    fi
+    wait_ready
+elif ! syncthing cli show system >/dev/null 2>&1; then
     syncthing generate --no-default-folder
     echo "Starting Syncthing"
     start_syncthing
@@ -388,26 +432,6 @@ fi
 if [ ${#skipped[@]} -gt 0 ]; then
     echo "Warning: skipped ${skipped[*]}, which already had files" >&2
 fi
-
-# Shut Syncthing down, and wait for it to let go of its database: starting
-# another before then fails. The process holding it is the one serving the GUI.
-stop_syncthing() {
-    local pid _
-    pid=$(ss -Hltnp "sport = :${st_gui_url##*:}" | grep -om1 'pid=[0-9]*' | cut -d= -f2)
-    if [ -z "$pid" ]; then
-        echo "Cannot find the Syncthing serving ${st_gui_url#*//}" >&2
-        return 1
-    fi
-    syncthing cli operations shutdown >/dev/null
-    for _ in $(seq 30); do
-        if ! kill -0 "$pid" 2>/dev/null; then
-            return 0
-        fi
-        sleep 1
-    done
-    echo "Syncthing did not shut down" >&2
-    return 1
-}
 
 # Restart Syncthing with --reset-deltas, so that every connected machine sends
 # its full index again. That flag acts as Syncthing starts, but its monitor

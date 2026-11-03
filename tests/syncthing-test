@@ -6,8 +6,9 @@
 # devices, joining jeeves's folders by label, asking before merging a folder
 # that has files, rerunning, refusing a folder already synced under another ID,
 # adding the .git and node_modules ignore patterns, keeping any others, on both
-# machines and away from home, and restricting Syncthing to the LAN and Tailscale.
-# Needs Syncthing, jq and curl installed; needs no root, and runs in about 8
+# machines and away from home, restricting Syncthing to the LAN and Tailscale,
+# and having a system service start it on jeeves, behind a fake sudo and
+# systemctl. Needs Syncthing, jq and curl installed; needs no root, and runs in about 8
 # seconds. The instances only listen on localhost and announce nothing: their
 # global discovery server is unreachable, for when the test turns discovery on.
 #
@@ -157,7 +158,25 @@ cat > "$work/bin/tailscale" <<'EOF'
 [ -z "${NO_TAILNET:-}" ] || exit 1
 echo '{"MagicDNSSuffix":"tailnet.example.ts.net"}'
 EOF
-chmod +x "$work/bin/ssh" "$work/bin/getent" "$work/bin/ip" "$work/bin/tailscale"
+# A fake sudo that logs what it runs, and a fake systemctl whose only service
+# runs an instance in the caller's home, as the real one does on jeeves.
+cat > "$work/bin/sudo" <<EOF
+#!/usr/bin/bash
+echo "\$*" >> "$work/sudo.log"
+exec "\$@"
+EOF
+cat > "$work/bin/systemctl" <<EOF
+#!/usr/bin/bash
+case \$1 in
+    is-enabled|is-active) [ -e "$work/service-on" ] ;;
+    enable)
+        touch "$work/service-on"
+        setsid -f syncthing serve --no-browser --no-restart </dev/null >>"$work/hub.log" 2>&1 3>&-
+        ;;
+esac
+EOF
+chmod +x "$work/bin/ssh" "$work/bin/getent" "$work/bin/ip" "$work/bin/tailscale" \
+    "$work/bin/sudo" "$work/bin/systemctl"
 
 # A copy of the repo, as the host "test" with one profile.
 dotfiles=$work/repo
@@ -245,6 +264,7 @@ check 'first run succeeds' [ "$rc" -eq 0 ]
 check 'starts Syncthing' has '^Starting Syncthing$'
 check 'adds the autostart entry' \
     cmp -s /usr/share/applications/syncthing-start.desktop "$client_home/.config/autostart/syncthing-start.desktop"
+check 'and enables no system service' [ ! -e "$work/sudo.log" ]
 check 'adds jeeves as an introducer' [ "$(client config devices "$hub_id" introducer get 2>/dev/null)" = true ]
 check 'adds the machine to jeeves' [ "$(hub config devices "$client_id" name get 2>/dev/null)" = test ]
 check 'limits jeeves to the LAN and Tailscale' [ "$(device_field client "$hub_id" allowedNetworks)" = "$networks" ]
@@ -345,9 +365,34 @@ hub config devices add --device-id "$phone_id" --name Zehn
 hub config devices add --device-id "$tablet_id" --name 'Some Tablet'
 open_options hub
 
+# jeeves as set up before it had a system service: started by hand, with an
+# autostart entry.
+mkdir -p "$hub_home/.config/autostart"
+touch "$hub_home/.config/autostart/syncthing-start.desktop"
+# Its processes: Syncthing's monitor and the one it runs.
+mapfile -t hub_pids < <(instances | while read -r pid; do
+    grep -qzF "HOME=$hub_home" "/proc/$pid/environ" && echo "$pid"
+done)
+# None of these processes is running.
+gone() {
+    local pid
+    for pid in "$@"; do
+        if kill -0 "$pid" 2>/dev/null; then
+            return 1
+        fi
+    done
+}
+
 # On jeeves, the listed folders get them, by label; the others are left alone.
 run_hub
 check 'jeeves succeeds' [ "$rc" -eq 0 ]
+check 'stops the Syncthing started by hand' gone "${hub_pids[@]}"
+check 'and says so' has "^Stopping the Syncthing that syncthing@$(id -un)\.service did not start$"
+check 'enables the system service, as this user' \
+    [ "$(cat "$work/sudo.log")" = "systemctl enable --now syncthing@$(id -un).service" ]
+hub_answers() { hub show system >/dev/null 2>&1; }
+check 'which answers' hub_answers
+check 'removes the autostart entry' [ ! -e "$hub_home/.config/autostart/syncthing-start.desktop" ]
 check 'jeeves turns off discovery, relays and NAT' options_closed hub
 check 'and limits its other devices' [ "$(device_field hub "$phone_id" allowedNetworks)" = "$networks" ]
 check 'with their names lowercased in the address' [ "$(device_field hub "$phone_id" addresses)" = "$(addresses zehn)" ]
@@ -359,6 +404,7 @@ check 'named by its path' has '^Ignoring .* in ~/music-elsewhere$'
 check 'an unlisted folder gets no ignores' [ -z "$(folder_ignores "$hub_home" other-1)" ]
 run_hub
 check 'jeeves rerun adds nothing' lacks 'Ignoring|Restricting|Turned off'
+check 'and leaves the service alone' [ "$(wc -l < "$work/sudo.log")" -eq 1 ]
 
 # A folder at a listed path, synced under another ID.
 client config folders add --id pics-9 --label Pictures --path '~/Pictures'
