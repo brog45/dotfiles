@@ -1,6 +1,8 @@
-# Immich photo server on jeeves. Paths, the database password and the
-# Tailscale auth key come from .env, a link to /srv/immich/.env (not
-# committed); run ./init-env to create it. See README.md.
+# Immich photo server on jeeves. The immich setup step installs this as
+# /srv/immich/compose.yaml, next to the data, and reruns replace that copy, so
+# change it here. The database password, the Tailscale auth key and the
+# pictures folder come from /srv/immich/.env, which the step fills in. Paths
+# are relative to /srv/immich. See README.md.
 
 name: immich
 
@@ -9,7 +11,7 @@ services:
     container_name: immich_server
     image: ghcr.io/immich-app/immich-server:v3
     volumes:
-      - ${IMMICH_DATA}/library:/data
+      - ./library:/data
       - ${PICTURES_LOCATION}:/mnt/pictures:ro
       - /etc/localtime:/etc/localtime:ro
     environment:
@@ -40,9 +42,9 @@ services:
       TS_STATE_DIR: /var/lib/tailscale
       TS_SERVE_CONFIG: /config/serve.json
     volumes:
-      - ${IMMICH_DATA}/tailscale:/var/lib/tailscale
+      - ./tailscale:/var/lib/tailscale
       # A directory, not the file, so that edits to it are picked up.
-      - ./tailscale:/config:ro
+      - ./tailscale-config:/config:ro
     depends_on:
       - immich-server
     restart: always
@@ -53,7 +55,7 @@ services:
     container_name: immich_machine_learning
     image: ghcr.io/immich-app/immich-machine-learning:v3
     volumes:
-      - ${IMMICH_DATA}/ml-model-cache:/cache
+      - ./ml-model-cache:/cache
     environment:
       MACHINE_LEARNING_MODEL_REVISION: v2
     restart: always
@@ -71,7 +73,7 @@ services:
     healthcheck:
       test: redis-cli ping | grep -q PONG || exit 1
     volumes:
-      - ${IMMICH_DATA}/redis:/data
+      - ./redis:/data
     restart: always
     user: 1000:1000
     security_opt:
@@ -89,7 +91,7 @@ services:
       POSTGRES_INITDB_ARGS: --data-checksums
       DB_STORAGE_TYPE: SSD
     volumes:
-      - ${IMMICH_DATA}/postgres:/var/lib/postgresql/data
+      - ./postgres:/var/lib/postgresql/data
     shm_size: 128mb
     restart: always
     healthcheck:

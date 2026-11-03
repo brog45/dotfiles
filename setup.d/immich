@@ -1,0 +1,148 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Install the Immich photo server into /srv/immich on a host whose
+# hosts/<host>/immich/ has a compose.yaml (jeeves), so that it runs on its own:
+# nothing there refers back to this repo. Copies each file under
+# hosts/<host>/immich/ to the same path under /srv/immich, replacing a copy that
+# differs, and makes the data directories. Fills in /srv/immich/.env: writes it
+# if it is missing, and adds any setting it lacks. A missing database password
+# is generated, unless the database exists already, since it only accepts the
+# one it was created with. Asks for a Tailscale auth key until the immich
+# machine has logged in. Then starts Immich, recreating any container whose
+# config changed, and waits for it to be healthy; Docker restarts it at every
+# boot. IMMICH_DIR overrides /srv/immich, for tests.
+
+repo_root=$(dirname "$(dirname "$(readlink -f "$0")")")
+# shellcheck source=lib/host-lists
+. "$repo_root/lib/host-lists"
+# shellcheck source=lib/terminal
+. "$repo_root/lib/terminal"
+
+src=$host_dir/immich
+dir=${IMMICH_DIR:-/srv/immich}
+env=$dir/.env
+
+if [[ ! -f $src/compose.yaml ]]; then
+    echo "No ${src#"$repo_root"/}/compose.yaml; Immich is not installed on $host"
+    exit 0
+fi
+
+if docker info >/dev/null 2>&1; then
+    docker=(docker)
+else
+    # Not in the docker group until you log in again after docker-group.
+    docker=(sudo docker)
+fi
+if ! "${docker[@]}" compose version >/dev/null; then
+    echo "Docker Compose is not installed" >&2
+    exit 1
+fi
+
+# Only you can read the settings and data. The containers run as uid 1000.
+umask 077
+if [[ ! -d $dir ]]; then
+    if [[ -w $(dirname "$dir") ]]; then
+        mkdir "$dir"
+    else
+        # /srv is root's; everything under it can be yours.
+        sudo install -d -m 700 -o "$(id -u)" -g "$(id -g)" "$dir"
+    fi
+    echo "Created $dir"
+fi
+# Docker would create a missing one as root.
+mkdir -p "$dir"/{library,ml-model-cache,redis,postgres,tailscale}
+
+# A file deleted from the repo stays installed until removed by hand.
+while IFS= read -r -d '' file; do
+    rel=${file#"$src"/}
+    if ! cmp -s "$file" "$dir/$rel"; then
+        mkdir -p "$(dirname "$dir/$rel")"
+        cp "$file" "$dir/$rel"
+        echo "Installed $dir/$rel"
+    fi
+done < <(find "$src" -type f -print0)
+
+# A setting's value in .env, empty when unset.
+get_setting() {
+    sed -n "s/^$1=//p" "$env" | tail -n 1
+}
+
+# Set a setting in .env: in place if it has a line, else on a new line at the
+# end, after the comment lines given.
+#   set_setting KEY VALUE [COMMENT...]
+set_setting() {
+    local key=$1 value=$2
+    shift 2
+    if grep -q "^$key=" "$env"; then
+        KEY=$key VALUE=$value awk '
+            index($0, ENVIRON["KEY"] "=") == 1 { $0 = ENVIRON["KEY"] "=" ENVIRON["VALUE"] }
+            { print }' "$env" >"$env.new"
+        mv "$env.new" "$env"
+    else
+        {
+            printf '# %s\n' "$@"
+            printf '%s=%s\n' "$key" "$value"
+        } >>"$env"
+    fi
+}
+
+if [[ ! -e $env ]]; then
+    {
+        echo "# Settings for Immich's compose.yaml, next to this file. Keep this file, and"
+        echo "# back it up with the database: it only accepts the password it was"
+        echo "# created with."
+    } >"$env"
+    echo "Created $env"
+fi
+
+if [[ -z $(get_setting PICTURES_LOCATION) ]]; then
+    set_setting PICTURES_LOCATION "$HOME/Pictures" \
+        "Mounted read-only at /mnt/pictures, for an external library."
+    echo "Set PICTURES_LOCATION in $env"
+fi
+
+if [[ -z $(get_setting DB_PASSWORD) ]]; then
+    if [[ -n $(ls -A "$dir/postgres") ]]; then
+        echo "$env has no DB_PASSWORD, but the database in $dir/postgres" >&2
+        echo "exists already; put back the password it was created with" >&2
+        exit 1
+    fi
+    # Immich allows only A-Za-z0-9 here.
+    set_setting DB_PASSWORD "$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)" \
+        "The database's password, made when it was created."
+    echo "Set DB_PASSWORD in $env"
+fi
+
+if ! grep -q '^TS_AUTHKEY=' "$env"; then
+    set_setting TS_AUTHKEY "" \
+        "Tailscale auth key for the immich machine, needed only until it first" \
+        "logs in; its login is then kept in tailscale/. Use a tagged key, so that" \
+        "the machine's key does not expire."
+    echo "Added TS_AUTHKEY to $env"
+fi
+
+# The key is needed until the immich machine has a login of its own.
+if [[ -z $(get_setting TS_AUTHKEY) && -z $(ls -A "$dir/tailscale") ]]; then
+    key=
+    if [[ -t 0 ]]; then
+        to_terminal
+        echo "Immich joins the tailnet as its own machine, immich, which needs a" >&3
+        echo "Tailscale auth key (a tagged one, so that the machine's key does not expire)." >&3
+        read -rsp "Paste a key, or press Enter to start Immich later: " key <&0 2>&3
+        echo >&3
+    fi
+    if [[ -z $key ]]; then
+        to_terminal
+        echo "Not starting Immich: no Tailscale auth key. Put one after TS_AUTHKEY=" >&3
+        echo "in $env, then run: setup immich" >&3
+        exit 0
+    fi
+    set_setting TS_AUTHKEY "$key"
+    echo "Set TS_AUTHKEY in $env"
+fi
+
+# Pulls missing images, and recreates only the containers whose config changed.
+"${docker[@]}" compose -f "$dir/compose.yaml" up -d --wait --wait-timeout 600
+echo "Immich is running from $dir"

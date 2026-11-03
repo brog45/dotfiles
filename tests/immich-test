@@ -1,0 +1,136 @@
+#!/usr/bin/bash
+
+# Tests for setup.d/immich, installing jeeves's hosts/jeeves/immich/ into a
+# throwaway directory behind a fake docker: a fresh install, rerunning,
+# replacing an edited copy, filling in a .env that lacks settings while keeping
+# the ones it has, refusing to make a new database password for an existing
+# database, starting without a key once Tailscale has logged in, and doing
+# nothing on a host without Immich. Needs no root or Docker, and runs in under
+# a second.
+#
+# Usage: tests/immich-test
+
+set -uo pipefail
+
+repo=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+passed=0
+failed=0
+
+check() {
+    local name=$1
+    shift
+    if "$@"; then
+        passed=$((passed + 1))
+    else
+        failed=$((failed + 1))
+        printf 'FAIL: %s\n' "$name"
+        printf '  output:\n    %s\n' "${out//$'\n'/$'\n'    }"
+    fi
+}
+
+# The fake docker logs each call; "docker info" and "docker compose version"
+# succeed.
+mkdir "$work/bin"
+cat >"$work/bin/docker" <<'EOF'
+#!/usr/bin/bash
+echo "$*" >>"$DOCKER_LOG"
+EOF
+chmod +x "$work/bin/docker"
+
+export HOME=$work/home PATH=$work/bin:$PATH DOCKER_LOG=$work/docker.log
+export IMMICH_DIR=$work/srv/immich DOTFILES_HOST=jeeves
+mkdir -p "$HOME" "$work/srv"
+dir=$IMMICH_DIR
+env=$dir/.env
+src=$repo/hosts/jeeves/immich
+
+# stdin is not a terminal, so the step never asks for a key.
+run() {
+    : >"$DOCKER_LOG"
+    out=$("$repo/setup.d/immich" </dev/null 2>&1)
+    rc=$?
+}
+
+setting() {
+    sed -n "s/^$1=//p" "$env"
+}
+
+started() {
+    grep -q "^compose -f $dir/compose.yaml up -d" "$DOCKER_LOG"
+}
+
+not_started() {
+    ! started
+}
+
+# grep -q, negated.
+lacks() {
+    ! grep -q "$@"
+}
+
+# Each name is a directory under $dir.
+dirs() {
+    local name
+    for name in "$@"; do
+        [ -d "$dir/$name" ] || return 1
+    done
+}
+
+# Fresh install, with no key: set up, but not started.
+run
+check 'fresh install succeeds' [ "$rc" -eq 0 ]
+check 'compose.yaml is installed' cmp -s "$src/compose.yaml" "$dir/compose.yaml"
+check 'serve.json is installed' cmp -s "$src/tailscale-config/serve.json" "$dir/tailscale-config/serve.json"
+check 'data directories are made' dirs library ml-model-cache redis postgres tailscale
+check '.env is only yours' [ "$(stat -c %a "$env")" = 600 ]
+check 'PICTURES_LOCATION is set' [ "$(setting PICTURES_LOCATION)" = "$HOME/Pictures" ]
+check 'DB_PASSWORD is 32 letters and digits' grep -qE '^DB_PASSWORD=[A-Za-z0-9]{32}$' "$env"
+check 'TS_AUTHKEY is added, empty' grep -qx 'TS_AUTHKEY=' "$env"
+check 'not started without a key' not_started
+check 'says how to start it' grep -q 'setup immich' <<<"$out"
+
+# With a key: started, and the settings kept.
+sed -i 's/^TS_AUTHKEY=$/TS_AUTHKEY=tskey-auth-test/' "$env"
+cp "$env" "$work/env.before"
+run
+check 'run with a key succeeds' [ "$rc" -eq 0 ]
+check 'started with a key' started
+check 'rerun keeps .env as it was' cmp -s "$work/env.before" "$env"
+check 'rerun installs nothing' lacks Installed <<<"$out"
+
+# An edited copy is replaced.
+echo '# edited' >>"$dir/compose.yaml"
+run
+check 'edited compose.yaml is replaced' cmp -s "$src/compose.yaml" "$dir/compose.yaml"
+check 'says it replaced it' grep -q "Installed $dir/compose.yaml" <<<"$out"
+
+# A .env missing settings gets them, and keeps the ones it has.
+printf 'DB_PASSWORD=keepme\nOTHER=1\nPICTURES_LOCATION=\n' >"$env"
+mkdir -p "$dir/tailscale/state" # logged in
+run
+check 'partial .env run succeeds' [ "$rc" -eq 0 ]
+check 'existing DB_PASSWORD is kept' [ "$(setting DB_PASSWORD)" = keepme ]
+check 'other settings are kept' grep -qx 'OTHER=1' "$env"
+check 'empty PICTURES_LOCATION is set in place' [ "$(sed -n 3p "$env")" = "PICTURES_LOCATION=$HOME/Pictures" ]
+check 'missing TS_AUTHKEY is added' grep -qx 'TS_AUTHKEY=' "$env"
+check 'started with no key once logged in' started
+
+# No password for an existing database: fails, rather than make a new one.
+printf 'PICTURES_LOCATION=/p\nTS_AUTHKEY=\n' >"$env"
+touch "$dir/postgres/PG_VERSION"
+run
+check 'missing password for an existing database fails' [ "$rc" -ne 0 ]
+check 'no new password is made' lacks '^DB_PASSWORD=' "$env"
+check 'not started' not_started
+
+# A host without Immich: nothing happens.
+rm -rf "$dir"
+DOTFILES_HOST=larry run
+check 'other host succeeds' [ "$rc" -eq 0 ]
+check 'other host installs nothing' [ ! -e "$dir" ]
+
+printf '%d passed, %d failed\n' "$passed" "$failed"
+[ "$failed" -eq 0 ]

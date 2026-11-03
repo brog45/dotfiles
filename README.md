@@ -181,33 +181,41 @@ the root by hand.
 
 ## Immich on jeeves
 
-`hosts/jeeves/immich/compose.yaml` runs the Immich photo server. It is reached
-only over the tailnet, at `https://immich.<tailnet>.ts.net`: a Tailscale
-container in the same compose project joins the tailnet as its own machine,
-`immich`, and serves Immich with a Tailscale HTTPS certificate
-(`tailscale/serve.json`). No port is open on jeeves itself. `setup` does not
-start it, but once started its containers restart at every boot. Its data and
-settings are under `/srv/immich`, outside the repository. The settings are in
-`/srv/immich/.env`, which holds the database password and the Tailscale auth
-key; `.env` next to `compose.yaml` is a link to it, so that `docker compose`
-there finds it. To start it:
+The `immich` setup step installs the Immich photo server on a host whose
+`hosts/<hostname>/immich/` has a `compose.yaml`, which only jeeves has. It is
+reached only over the tailnet, at `https://immich.<tailnet>.ts.net`: a
+Tailscale container in the same compose project joins the tailnet as its own
+machine, `immich`, and serves Immich with a Tailscale HTTPS certificate
+(`tailscale-config/serve.json`). No port is open on jeeves itself.
 
-```
-cd ~/dotfiles/hosts/jeeves/immich
-./init-env
-# paste a Tailscale auth key after TS_AUTHKEY= in /srv/immich/.env
-docker compose up -d
-```
+Everything Immich needs is in `/srv/immich`, so it runs on its own: nothing
+there refers to this repository, which could be deleted without affecting it.
+The step copies each file under `hosts/jeeves/immich/` to the same path in
+`/srv/immich`, replacing a copy that differs, so make changes in the repository
+and rerun `setup immich`. A file deleted from the repository stays in
+`/srv/immich` until you remove it. Next to them are the data directories
+(uploads, database, machine-learning cache, Valkey, Tailscale's login), all
+readable only by you.
 
-`init-env` creates the data directories under `/srv/immich` (uploads,
-database, machine-learning cache, Valkey, Tailscale state), owned by you,
-writes `/srv/immich/.env` with a random password if it does not exist yet,
-adds an empty `TS_AUTHKEY` line if it lacks one, and makes the `.env` link.
-Keep `/srv/immich/.env`, and back it up with the data: the database only
-accepts the password it was created with. The auth key is needed only until the
-`immich` machine first logs in; use a tagged key, so that the machine's key
-does not expire. `~/Pictures` is mounted read-only at `/mnt/pictures`, so
-Immich can show it as an external library without copying the originals.
+The settings are in `/srv/immich/.env`. The step writes it if it is missing,
+and adds any of these it lacks, keeping the rest:
+
+- `PICTURES_LOCATION`, `~/Pictures` by default, mounted read-only at
+  `/mnt/pictures`, so Immich can show it as an external library without
+  copying the originals.
+- `DB_PASSWORD`, a random one. If the database exists already, the step stops
+  instead: the database only accepts the password it was created with. Keep
+  `.env`, and back it up with the data.
+- `TS_AUTHKEY`, a Tailscale auth key, needed only until the `immich` machine
+  first logs in; its login is then kept in `/srv/immich/tailscale`. Use a
+  tagged key, so that the machine's key does not expire. Until then the step
+  asks for one, and without one leaves Immich stopped.
+
+It then starts Immich with `docker compose up -d`, which recreates only the
+containers whose config changed, and waits for them to be healthy. Docker
+restarts them at every boot. The step does not update the images to newer
+versions; to do that, run `docker compose pull` and `docker compose up -d` in
+`/srv/immich`.
 
 ## Updating the lists
 
@@ -249,6 +257,13 @@ stopping at a failed step. It needs no root and takes a few seconds.
 home directory: stowing from the root, profile and host trees, and upgrading
 links left by the old `base/` package or by moving a file between trees. It
 needs GNU Stow and takes about a second.
+
+`tests/immich-test` checks the `immich` setup script, installing jeeves's
+Immich into a throwaway directory behind a fake `docker`: a fresh install,
+rerunning, replacing an edited copy, filling in a `.env` that lacks settings
+while keeping the ones it has, refusing to make a new password for an existing
+database, and doing nothing on other hosts. It needs no root or Docker, and
+takes under a second.
 
 `tests/syncthing-test` checks the `syncthing` setup script with two throwaway
 Syncthing instances, one standing in for jeeves behind a fake `ssh`: pairing

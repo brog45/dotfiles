@@ -11,6 +11,8 @@ apt-update
 install-firacode-nerd-font
 install-packages-leaves
 docker-group
+# After install-packages-leaves, which installs Docker.
+immich
 install-flatpaks
 remove-duplicate-user-flatpaks
 default-browser
