@@ -1,0 +1,319 @@
+#!/usr/bin/python3 -I
+"""Work out when old photos were taken, from the folders they were copied into,
+and optionally set each file's modification time to it.
+
+For each folder under the given directories, a file's date comes from, in order:
+
+  index   the Sony Mavica index (mavica.htm, or index.html made by the same
+          viewer) in its folder, which lists each picture with the camera's
+          time, read as America/Chicago time. A file whose name is a listed
+          picture's with "-N" added (an edited copy) gets that picture's time,
+          and an index file gets the time in its own header.
+  folder  a folder name that starts with a date, YYYY-MM-DD, followed by
+          nothing, a two-digit disk number (-00 to -09) or a word (-Santa).
+          Its time is set to noon, so that a time zone cannot move it to
+          another day.
+
+Everything else is skipped: a name that is a full timestamp, YYYY-MM-DD-HH-MM-SS,
+is when a floppy was copied, which can be weeks after the pictures on it; a
+name with only a month, YYYY-MM, is not a date; and a file whose EXIF has a
+date keeps it, since Immich uses that rather than the file's time. A file
+whose index time is after the folder's copy time, or in another year than the
+folder, is reported and skipped too.
+
+Usage:
+  mavica-dates [--list | --folders] [--apply] [--xmp] DIR...
+
+With no option, prints how many files each rule dates and each skipped
+folder, with why. --list prints one tab-separated line per file: path, current
+time, new time (or -), source, note. --folders prints one line per folder with
+an index instead. --apply sets the modification times of the dated files whose
+time differs; it never changes a file's contents.
+
+--xmp writes an XMP sidecar, PICTURE.jpg.xmp, next to each dated picture or
+video, giving its date with its UTC offset. Immich takes a sidecar's date over
+the file's, and without one it reads a file's time as UTC, so that evening
+pictures land on the next day. A sidecar that is already right is left alone,
+and one this script did not write is never replaced, only reported. Immich
+reads new sidecars only when told to: in Administration, Jobs, run Sidecar
+Metadata's Discover, then, once that is done, Extract Metadata's All.
+EXIF is read with exiftool, from $EXIFTOOL or the PATH, or from the
+immich_server container when neither has it.
+"""
+
+import argparse
+import datetime as dt
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from collections import Counter, defaultdict
+from zoneinfo import ZoneInfo
+
+ZONE = ZoneInfo("America/Chicago")
+INDEX_NAMES = {"mavica.htm", "mavica2.htm", "index.html"}
+# An entry is "MVC-517F.JPG 2002 12 22 4:09:34 PM", once the tags are stripped.
+NAME = re.compile(r"[\w.-]+\.\w{3}")
+NUMBER = re.compile(r"\d{1,4}")
+TIME = re.compile(r"(\d{1,2}):(\d{2}):(\d{2})")
+AMPM = {"am", "pm"}
+HEADER = re.compile(
+    r"Digital Mavica image viewer\s+(\d{4})\s+(\d{1,2})\s+(\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})\s*([AP]M)",
+    re.IGNORECASE,
+)
+FULL_STAMP = re.compile(r"^(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})-(\d{2})$")
+DAY = re.compile(r"^(\d{4})-(\d{2})-(\d{2})(?:-(?:0\d|[A-Za-z]\w*))?$")
+MONTH = re.compile(r"^(\d{4})-(\d{2})(?:-[A-Za-z]\w*)?$")
+# How far an index time may be from the folder's name before it is doubted. In
+# these folders, the pictures are up to about six months older than the name,
+# and at most six days newer.
+BEFORE = dt.timedelta(days=366)
+AFTER = dt.timedelta(days=8)
+# The pictures and videos that get a sidecar with --xmp: the kinds Immich shows.
+MEDIA = {".jpg", ".jpeg", ".gif", ".png", ".bmp", ".tif", ".tiff", ".mpg", ".mpeg"}
+XMP_MARK = "written by mavica-dates"
+XMP = """<?xpacket begin='\ufeff' id='W5M0MpCehiHzreSzNTczkc9d'?>
+<!-- """ + XMP_MARK + """ -->
+<x:xmpmeta xmlns:x='adobe:ns:meta/'>
+ <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+  <rdf:Description rdf:about=''
+    xmlns:exif='http://ns.adobe.com/exif/1.0/'>
+   <exif:DateTimeOriginal>{date}</exif:DateTimeOriginal>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end='w'?>
+"""
+# Container paths for the immich_server fallback.
+HOST_PICTURES = os.path.expanduser("~/Pictures")
+CONTAINER_PICTURES = "/mnt/pictures"
+CONTAINER_EXIFTOOL = (
+    "/usr/src/app/server/node_modules/.pnpm/node_modules/.bin/exiftool"
+)
+
+
+def clock(year, month, day, hour, minute, second, ampm):
+    hour = int(hour) % 12 + (12 if ampm.upper() == "PM" else 0)
+    return dt.datetime(
+        int(year), int(month), int(day), hour, int(minute), int(second), tzinfo=ZONE
+    )
+
+
+def read_index(path):
+    """The header time and {lowercase picture stem: time} of a Mavica index,
+    or None if the file is not one."""
+    with open(path, "rb") as f:
+        raw = f.read()
+    text = re.sub(r"<[^>]*>", " ", raw.decode("latin-1"))
+    text = re.sub(r"\s+", " ", text)
+    header = HEADER.search(text)
+    if not header:
+        return None
+    # Token by token: a regular expression over these runs of text without
+    # spaces is very slow.
+    words = text[header.end():].split()
+    entries = {}
+    for i in range(len(words) - 5):
+        name, year, month, day, time, ampm = words[i:i + 6]
+        if (NAME.fullmatch(name) and len(year) == 4 and all(
+                NUMBER.fullmatch(w) for w in (year, month, day))
+                and TIME.fullmatch(time) and ampm.lower() in AMPM):
+            stem = os.path.splitext(name.lower())[0]
+            entries[stem] = clock(year, month, day, *TIME.fullmatch(time).groups(), ampm)
+    return clock(*header.groups()), entries
+
+
+def exif_dates(dirs):
+    """{path: EXIF date string} for the files under dirs that have one."""
+    tags = ["-DateTimeOriginal", "-CreateDate"]
+    exiftool = os.environ.get("EXIFTOOL") or shutil.which("exiftool")
+    if exiftool:
+        cmd = [exiftool, "-r", "-j", "-q", "-q", *tags, *dirs]
+        to_host = lambda p: p
+    else:
+        container_dirs = []
+        for d in dirs:
+            d = os.path.realpath(d)
+            if not d.startswith(HOST_PICTURES + "/") and d != HOST_PICTURES:
+                sys.exit(f"no exiftool, and {d} is not under {HOST_PICTURES}")
+            container_dirs.append(CONTAINER_PICTURES + d[len(HOST_PICTURES):])
+        cmd = ["docker", "exec", "immich_server", CONTAINER_EXIFTOOL,
+               "-r", "-j", "-q", "-q", *tags, *container_dirs]
+        to_host = lambda p: HOST_PICTURES + p[len(CONTAINER_PICTURES):]
+    out = subprocess.run(cmd, capture_output=True, text=True).stdout
+    found = {}
+    for item in json.loads(out or "[]"):
+        date = item.get("DateTimeOriginal") or item.get("CreateDate")
+        if date:
+            found[os.path.realpath(to_host(item["SourceFile"]))] = str(date)
+    return found
+
+
+def folder_date(name):
+    """(time, None) for a folder name that dates its files, else (None, why)."""
+    if FULL_STAMP.match(name):
+        return None, "full timestamp: when it was copied, not when taken"
+    m = DAY.match(name)
+    if m:
+        try:
+            day = dt.datetime(*map(int, m.groups()), 12, tzinfo=ZONE)
+        except ValueError:
+            return None, "not a real date"
+        return day, None
+    if MONTH.match(name):
+        return None, "month only"
+    return None, "no date in the name"
+
+
+def copy_time(name):
+    m = FULL_STAMP.match(name)
+    return dt.datetime(*map(int, m.groups()), tzinfo=ZONE) if m else None
+
+
+def plan(dirs, exif):
+    """One (path, current, new, source, note) per file under dirs."""
+    rows = []
+    for top in dirs:
+        for folder, _, files in os.walk(top):
+            name = os.path.basename(folder)
+            index_header = {}
+            entries = {}
+            for f in files:
+                if f.lower() in INDEX_NAMES:
+                    got = read_index(os.path.join(folder, f))
+                    if got:
+                        index_header[f] = got[0]
+                        entries.update(got[1])
+            by_name, why = folder_date(name)
+            copied = copy_time(name)
+            # The folder's year, from its own name or its parent's.
+            year = re.match(r"\d{4}", name) or re.match(
+                r"\d{4}", os.path.basename(os.path.dirname(folder)))
+            for f in sorted(files):
+                if f.lower().endswith(".xmp"):
+                    continue  # a sidecar, dated with its picture
+                path = os.path.join(folder, f)
+                current = dt.datetime.fromtimestamp(os.stat(path).st_mtime, ZONE)
+                stem = os.path.splitext(f.lower())[0]
+                if os.path.realpath(path) in exif:
+                    rows.append((path, current, None, "skip", f"EXIF date {exif[os.path.realpath(path)]}"))
+                    continue
+                new = source = note = None
+                if f in index_header:
+                    new, source = index_header[f], "index"
+                elif stem in entries:
+                    new, source = entries[stem], "index"
+                elif re.sub(r"-\d+$", "", stem) in entries:
+                    new, source = entries[re.sub(r"-\d+$", "", stem)], "index"
+                    note = "edited copy"
+                if new is not None:
+                    named = copied or by_name
+                    if named and not (named - BEFORE <= new <= named + AFTER):
+                        rows.append((path, current, None, "skip",
+                                     f"index time {new:%F %T} is far from the folder's, {named:%F %T}"))
+                        continue
+                    if not named and year and new.year != int(year.group()):
+                        rows.append((path, current, None, "skip",
+                                     f"index time {new:%F %T} is not in {year.group()}"))
+                        continue
+                elif by_name:
+                    new, source = by_name, "folder"
+                else:
+                    rows.append((path, current, None, "skip", why if not entries
+                                 else f"not in the folder's index; {why}"))
+                    continue
+                rows.append((path, current, new, source, note or ""))
+    return rows
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("dirs", nargs="+", metavar="DIR")
+    parser.add_argument("--list", action="store_true", help="one line per file")
+    parser.add_argument("--folders", action="store_true",
+                        help="one line per folder with an index: its first and last"
+                        " index times, and the hours from the last to the folder's"
+                        " copy time")
+    parser.add_argument("--apply", action="store_true", help="set the times")
+    parser.add_argument("--xmp", action="store_true",
+                        help="write XMP sidecars with the dates, for Immich")
+    args = parser.parse_args()
+
+    if args.folders:
+        for top in args.dirs:
+            for folder, _, files in sorted(os.walk(top)):
+                times = []
+                for f in files:
+                    if f.lower() in INDEX_NAMES:
+                        got = read_index(os.path.join(folder, f))
+                        if got:
+                            times += got[1].values()
+                if not times:
+                    continue
+                copied = copy_time(os.path.basename(folder))
+                gap = f"{(copied - max(times)).total_seconds() / 3600:.1f}" if copied else "-"
+                print(f"{folder}\t{min(times):%F %T}\t{max(times):%F %T}\t{gap}")
+        return
+
+    rows = plan(args.dirs, exif_dates(args.dirs))
+
+    if args.list:
+        for path, current, new, source, note in rows:
+            print("\t".join([path, f"{current:%F %T %z}",
+                             f"{new:%F %T %z}" if new else "-", source, note]))
+    else:
+        counts = Counter(source for _, _, _, source, _ in rows)
+        for source in ("index", "folder", "skip"):
+            print(f"{source:>6}: {counts[source]} files")
+        skipped = defaultdict(Counter)
+        for path, _, new, source, note in rows:
+            if source == "skip":
+                reason = re.sub(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d", "TIME", note)
+                reason = re.sub(r"EXIF date .*", "EXIF date", reason)
+                skipped[os.path.dirname(path)][reason] += 1
+        if skipped:
+            print("\nSkipped, by folder:")
+            for folder in sorted(skipped):
+                why = "; ".join(f"{n} {r}" for r, n in skipped[folder].items())
+                print(f"  {folder}: {why}")
+
+    if args.apply:
+        changed = 0
+        for path, current, new, _, _ in rows:
+            if new and new.timestamp() != current.timestamp():
+                st = os.stat(path)
+                os.utime(path, ns=(st.st_atime_ns, int(new.timestamp()) * 10**9))
+                changed += 1
+        print(f"\nset the time of {changed} files", file=sys.stderr)
+
+    if args.xmp:
+        written = kept = 0
+        for path, _, new, _, _ in rows:
+            if not new or os.path.splitext(path)[1].lower() not in MEDIA:
+                continue
+            sidecar = path + ".xmp"
+            want = XMP.format(date=new.isoformat())
+            try:
+                with open(sidecar, encoding="utf-8") as f:
+                    have = f.read()
+            except FileNotFoundError:
+                have = None
+            if have == want:
+                continue
+            if have is not None and XMP_MARK not in have:
+                print(f"not replacing {sidecar}: not written by mavica-dates",
+                      file=sys.stderr)
+                kept += 1
+                continue
+            with open(sidecar, "w", encoding="utf-8") as f:
+                f.write(want)
+            written += 1
+        print(f"\nwrote {written} sidecars" + (f", kept {kept} others" if kept else ""),
+              file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()
