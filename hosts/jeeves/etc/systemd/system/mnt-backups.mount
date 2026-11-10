@@ -1,0 +1,16 @@
+# The Seagate Portable Drive (USB, NTFS), the backup disk, at /mnt/backups.
+# Wanted by its device, so it mounts at boot if plugged in, or when plugged in
+# later, and boot never waits for it. Files are owned by brogers (uid 1000).
+# The unit's name must match the mount point (systemd-escape -p).
+
+[Unit]
+Description=Seagate Portable Drive (backup disk)
+
+[Mount]
+What=/dev/disk/by-uuid/1CF6699AF66974C4
+Where=/mnt/backups
+Type=ntfs3
+Options=nofail,noatime,uid=1000,gid=1000,iocharset=utf8
+
+[Install]
+WantedBy=dev-disk-by\x2duuid-1CF6699AF66974C4.device

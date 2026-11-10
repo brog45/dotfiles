@@ -7,6 +7,8 @@ set -euo pipefail
 # Where two of them have the same file, the later one wins, so a host can
 # override its profiles. Only files that differ are written, so rerunning is
 # a no-op; files in /etc that the repo does not mention are left alone.
+# Unit files in /etc/systemd/system/ with an [Install] section are enabled,
+# and started when new or changed; changed udev rules are applied at once.
 #
 # Prefer drop-in directories such as /etc/systemd/logind.conf.d/ over
 # replacing a package's own config file, so package upgrades never conflict.
@@ -31,14 +33,22 @@ if [ ${#source_of[@]} -eq 0 ]; then
 fi
 
 udev_changed=0
+systemd_changed=0
+units=()            # unit files in /etc/systemd/system/ itself
+declare -A unit_changed=()
 while IFS= read -r -d '' dest; do
     file=${source_of[$dest]}
+    if [[ $dest == /etc/systemd/system/*.* && $dest != /etc/systemd/system/*/* ]]; then
+        units+=("${dest##*/}")
+    fi
     if cmp -s "$file" "$dest"; then
         echo "$dest is up to date"
     else
         echo "Installing $dest from ${file#"$repo_root"/}"
         sudo install -D -m 644 "$file" "$dest"
         [[ $dest == /etc/udev/rules.d/* ]] && udev_changed=1
+        [[ $dest == /etc/systemd/system/* ]] && systemd_changed=1
+        unit_changed[${dest##*/}]=1
     fi
 done < <(printf '%s\0' "${!source_of[@]}" | sort -z)
 
@@ -48,3 +58,25 @@ if [ $udev_changed -eq 1 ]; then
     sudo udevadm control --reload
     sudo udevadm trigger
 fi
+
+# Load new or changed units, then enable each one that has an [Install]
+# section. Start a unit only when it is newly enabled or changed, so a rerun
+# does not restart one you stopped. --no-block, so a mount whose device is
+# unplugged does not hold up setup.
+if [ $systemd_changed -eq 1 ]; then
+    echo "Reloading systemd units"
+    sudo systemctl daemon-reload
+fi
+for unit in "${units[@]}"; do
+    grep -q '^\[Install\]' "/etc/systemd/system/$unit" || continue
+    start=${unit_changed[$unit]:-0}
+    if [ "$(systemctl is-enabled "$unit" 2>/dev/null)" != enabled ]; then
+        echo "Enabling $unit"
+        sudo systemctl enable "$unit"
+        start=1
+    fi
+    if [ "$start" -eq 1 ]; then
+        echo "Starting $unit"
+        sudo systemctl restart --no-block "$unit"
+    fi
+done

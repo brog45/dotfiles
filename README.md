@@ -84,7 +84,10 @@ Files under `etc/` in a host's profiles and in `hosts/<hostname>/` are copied
 into `/etc` at the same paths by the `install-etc` setup script. Where both
 have the same file, the host's wins. Use drop-in directories such as
 `/etc/systemd/logind.conf.d/` rather than replacing a package's own config
-file.
+file. A unit file in `etc/systemd/system/` that has an `[Install]` section is
+enabled, and started when it is new or changed. jeeves uses one,
+`mnt-backups.mount`, to mount its USB backup disk at `/mnt/backups` whenever
+it is plugged in, without boot waiting for it.
 
 ## Syncthing
 
