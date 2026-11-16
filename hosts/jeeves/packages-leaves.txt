@@ -13,6 +13,6 @@ network-manager-pptp-gnome
 planner
 remmina
 sessioninstaller
+smartmontools
 tilde
-warp-terminal
 zenmap
