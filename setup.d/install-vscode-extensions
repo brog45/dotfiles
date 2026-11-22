@@ -7,6 +7,9 @@ script_dir=$(dirname "$script")
 repo_root=$(dirname "$script_dir")
 # shellcheck source=lib/host-lists
 . "$repo_root/lib/host-lists"
+# shellcheck source=lib/desktop
+. "$repo_root/lib/desktop"
+require_desktop "installing VS Code extensions"
 
 # The shared vscode-extensions.txt plus this host's profiles' and its own
 # hosts/<host>/vscode-extensions.txt.

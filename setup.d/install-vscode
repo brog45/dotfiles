@@ -2,6 +2,11 @@
 # Install VS Code from Microsoft's apt repo.
 set -euo pipefail
 
+repo_root=$(dirname "$(dirname "$(readlink -f "$0")")")
+# shellcheck source=lib/desktop
+. "$repo_root/lib/desktop"
+require_desktop "installing VS Code"
+
 # Once installed, the code package manages the repo itself: its postinst
 # rewrites vscode.sources (signed by microsoft.gpg) and deletes any
 # vscode.list. Set the repo up the same way, so the two never disagree; apt

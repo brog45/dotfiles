@@ -69,14 +69,22 @@ them.
 
 ## Profiles
 
-A profile is a set of lists and config that several machines share, such as
-`desktop`. Each lives in `profiles/<profile>/` and may hold any of
+A profile is a set of lists and config that several machines share. `dev` has
+the command-line tools and services (Docker, Syncthing, Tailscale) that the
+workstations and jeeves all use; `desktop` has the graphical apps, fonts and
+settings, and `laptop` what only the laptops need. Each lives in
+`profiles/<profile>/` and may hold any of
 `packages-leaves.txt`, `packages-leaves-exclude.txt`, `flatpaks.txt`,
 `alternatives.txt`, `vscode-extensions.txt`, `syncthing-folders.txt`, an
 `etc/` tree, a `stow/` tree and an `avatar.txt`.
 
 A machine builds on the profiles named in `hosts/<hostname>/profiles.txt`, one
 per line. A name with no `profiles/` directory is an error, not skipped.
+
+The setup steps that install desktop apps (flatpaks, VS Code and its
+extensions, the FiraCode Nerd Font) skip on a machine with no desktop
+environment installed, whatever its profiles. The ones that configure a
+desktop or an app skip when it is missing.
 
 ## System config
 
@@ -132,7 +140,7 @@ items in a folder that jeeves says it needs nothing in, the script lists them
 and offers to restart Syncthing with `--reset-deltas`, which has every
 connected machine send its full index again without changing any files. The
 automated test cannot fake that state, so this part has been checked only on
-a real machine. The `desktop` profile
+a real machine. The `dev` profile
 lists `~/Documents`, `~/Dropbox`, `~/Music` and `~/Pictures`.
 
 When the web UI says another machine is out of sync, `./syncthing-need

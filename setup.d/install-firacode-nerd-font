@@ -4,6 +4,11 @@ set -euo pipefail
 
 # Install FiraCode Nerd Font for the current user (alacritty uses it).
 
+repo_root=$(dirname "$(dirname "$(readlink -f "$0")")")
+# shellcheck source=lib/desktop
+. "$repo_root/lib/desktop"
+require_desktop "installing FiraCode Nerd Font"
+
 font='FiraCode Nerd Font'
 url=https://github.com/ryanoasis/nerd-fonts/releases/latest/download/FiraCode.tar.xz
 font_dir=~/.local/share/fonts/FiraCodeNerdFont
