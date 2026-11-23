@@ -11,6 +11,11 @@ user may not be in the `sudo` group yet, so install `git` as root:
 su -c 'apt install -y git'
 ```
 
+The vendor repositories `setup` adds are all HTTPS. APT handles HTTPS itself,
+but needs `ca-certificates` to check the servers, and a Debian install
+without the standard system utilities lacks it; the `apt-https` setup step
+installs it before the package lists are updated.
+
 ## Installation
 
 Check out the `dotfiles` repo in your `$HOME` directory and run `setup`.

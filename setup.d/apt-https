@@ -1,0 +1,26 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Let APT fetch from HTTPS repositories, as the vendor repositories that later
+# steps add (Docker, Tailscale, VS Code, Claude Desktop) all are. APT has
+# spoken HTTPS itself since version 1.5, so apt-transport-https is only a
+# transitional package now, but checking a server's certificate needs the CA
+# certificates. Ubuntu rates ca-certificates important, so it is always
+# there; Debian rates it standard, so an install without the standard system
+# utilities lacks it. Runs before apt-update, whose update would otherwise
+# fail on any HTTPS repository already configured.
+
+if dpkg-query -W -f '${db:Status-Status}' ca-certificates 2>/dev/null | grep -qx installed; then
+    echo "ca-certificates is already installed"
+    exit 0
+fi
+
+echo "Installing ca-certificates, so APT can use HTTPS repositories"
+# Try the package lists already there first. If they are missing or stale,
+# update them: an HTTPS repository may fail to update until this is done, but
+# the others' lists are still refreshed, which is all this install needs.
+if ! sudo apt-get install -y ca-certificates; then
+    sudo apt-get update || echo "Some package lists failed to update; trying anyway"
+    sudo apt-get install -y ca-certificates
+fi
