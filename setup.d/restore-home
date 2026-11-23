@@ -1,0 +1,46 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# On a new install of a host that is backed up (see lib/backup), restore from
+# its backup the parts of your home directory nothing else sets up: ~/Maildir
+# and ~/src when they are missing or empty, and Claude Code's settings,
+# memory and login (~/.claude and ~/.claude.json) while ~/.claude has no
+# projects/, and this repo's todo.md, which git ignores, while there is none.
+# Files already there are kept. Runs before install-claude-cli, so Claude
+# Code starts out with them.
+
+repo_root=$(dirname "$(dirname "$(readlink -f "$0")")")
+# shellcheck source=lib/host-lists
+. "$repo_root/lib/host-lists"
+# shellcheck source=lib/terminal
+. "$repo_root/lib/terminal"
+# shellcheck source=lib/backup
+. "$repo_root/lib/backup"
+
+# Succeed if PATH does not exist, or is an empty directory.
+#   missing_or_empty PATH
+missing_or_empty() {
+    [ ! -e "$1" ] || { [ -d "$1" ] && [ -z "$(find "$1" -mindepth 1 -print -quit)" ]; }
+}
+
+restored=
+if missing_or_empty ~/Maildir && restore_wanted maildir; then
+    restore_item maildir --skip-old-files
+    restored=1
+fi
+if missing_or_empty ~/src && restore_wanted src; then
+    restore_item src --skip-old-files
+    restored=1
+fi
+if [ ! -d ~/.claude/projects ] && restore_wanted claude; then
+    restore_item claude --skip-old-files
+    restored=1
+fi
+if [ ! -e "${BACKUP_REPO_DIR:-$repo_root}/todo.md" ] && restore_wanted todo; then
+    restore_item todo --skip-old-files
+    restored=1
+fi
+if [ -z "$restored" ]; then
+    echo "Nothing in your home directory to restore"
+fi

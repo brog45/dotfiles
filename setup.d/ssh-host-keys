@@ -1,0 +1,55 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# On a new install of a host that is backed up (see lib/backup), give it back
+# the SSH host keys it had, so that machines connecting to it do not warn of a
+# changed host key. Asks first, then restarts sshd. Does nothing once the keys
+# match the backup's, or on the machine the backup is made from.
+
+repo_root=$(dirname "$(dirname "$(readlink -f "$0")")")
+# shellcheck source=lib/host-lists
+. "$repo_root/lib/host-lists"
+# shellcheck source=lib/terminal
+. "$repo_root/lib/terminal"
+# shellcheck source=lib/backup
+. "$repo_root/lib/backup"
+
+ssh_dir=$backup_sysroot/etc/ssh
+
+if ! restore_wanted ssh-host-keys; then
+    echo "No SSH host keys to restore"
+    exit 0
+fi
+
+tmp=$(mktemp -d)
+# shellcheck disable=SC2016  # expanded when the script exits
+backup_on_exit 'sudo rm -rf "$tmp"'
+backup_extract ssh-host-keys "$tmp"
+
+changed=()
+for file in "$tmp"/etc/ssh/ssh_host_*; do
+    if ! sudo cmp -s "$file" "$ssh_dir/${file##*/}"; then
+        changed+=("${file##*/}")
+    fi
+done
+mark="restored from $(backup_archive ssh-host-keys) on $(date '+%F %T')"
+if [ ${#changed[@]} -eq 0 ]; then
+    echo "The SSH host keys are already the backup's"
+    backup_mark ssh-host-keys "$mark"
+    exit 0
+fi
+
+to_terminal
+echo "This machine's SSH host keys differ from $host's in its backup." >&3
+read -r -p "Replace them with the backup's, so others know it as $host? [Y/n] " reply 2>&3 || reply=n
+if [[ $reply == [nN]* ]]; then
+    echo "Keeping this machine's SSH host keys; rerun $0 to restore $host's"
+    exit 0
+fi
+
+sudo cp -p "$tmp"/etc/ssh/ssh_host_* "$ssh_dir/"
+echo "Restored the SSH host keys: ${changed[*]}"
+backup_mark ssh-host-keys "$mark"
+# Restarting does not end open sessions.
+sudo systemctl try-restart ssh.service

@@ -13,16 +13,29 @@ set -euo pipefail
 # machine has logged in. Then starts Immich, recreating any container whose
 # config changed, and waits for it to be healthy; Docker restarts it at every
 # boot. IMMICH_DIR overrides /srv/immich, for tests.
+#
+# On a new install, with no database yet, it first restores /srv/immich from
+# this host's backup (see lib/backup), and pulls the images the backup was
+# made with, tagged as the compose file names them, so that compose runs
+# those versions rather than pulling newer ones. It then leaves Immich stopped
+# until Syncthing has fetched PICTURES_LOCATION back from the other machines:
+# Immich scanning that external library while it is empty could mark every
+# photo in it offline.
 
 repo_root=$(dirname "$(dirname "$(readlink -f "$0")")")
 # shellcheck source=lib/host-lists
 . "$repo_root/lib/host-lists"
 # shellcheck source=lib/terminal
 . "$repo_root/lib/terminal"
+# shellcheck source=lib/backup
+. "$repo_root/lib/backup"
+# shellcheck source=lib/syncthing
+. "$repo_root/lib/syncthing"
 
 src=$host_dir/immich
 dir=${IMMICH_DIR:-/srv/immich}
 env=$dir/.env
+waiting=${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/immich-waits-for-pictures
 
 if [[ ! -f $src/compose.yaml ]]; then
     echo "No ${src#"$repo_root"/}/compose.yaml; Immich is not installed on $host"
@@ -38,6 +51,29 @@ fi
 if ! "${docker[@]}" compose version >/dev/null; then
     echo "Docker Compose is not installed" >&2
     exit 1
+fi
+
+# Pull each image in image-digests.txt (written by backup-host) by its digest,
+# and tag it as the compose file names it. An image the compose file names by
+# digest already is only pulled.
+restore_images() {
+    local ref digest
+    [[ -f $dir/image-digests.txt ]] || return 0
+    while read -r ref digest; do
+        [[ -n $ref ]] || continue
+        echo "Pulling $ref as the backup ran it, $digest"
+        "${docker[@]}" pull "$digest"
+        if [[ $ref != *@* ]]; then
+            "${docker[@]}" tag "$digest" "$ref"
+        fi
+    done <"$dir/image-digests.txt"
+}
+
+if [[ -z $(ls -A "$dir/postgres" 2>/dev/null) ]] && restore_wanted immich; then
+    restore_item immich
+    restore_images
+    mkdir -p "$(dirname "$waiting")"
+    : >"$waiting"
 fi
 
 # Only you can read the settings and data. The containers run as uid 1000.
@@ -141,6 +177,36 @@ if [[ -z $(get_setting TS_AUTHKEY) && -z $(ls -A "$dir/tailscale") ]]; then
     fi
     set_setting TS_AUTHKEY "$key"
     echo "Set TS_AUTHKEY in $env"
+fi
+
+# Succeed if Syncthing is running and has the folder at PATH complete: idle,
+# needing nothing, and holding files, so that it has had the other machines'
+# index.
+#   synced PATH
+synced() {
+    local path=$1 id
+    command -v syncthing >/dev/null && command -v jq >/dev/null && command -v curl >/dev/null || return 1
+    syncthing cli show system >/dev/null 2>&1 || return 1
+    id=$(syncthing cli config dump-json | jq -r --arg home "$HOME" --arg p "$path" \
+        'first(.folders[] | select((.path | sub("^~"; $home) | rtrimstr("/")) == ($p | rtrimstr("/"))) | .id) // empty')
+    [[ -n $id ]] || return 1
+    st_api_init
+    st_api "db/status?folder=$(uri "$id")" |
+        jq -e '.state == "idle" and .needTotalItems == 0 and .globalFiles > 0' >/dev/null
+}
+
+if [[ -e $waiting ]]; then
+    pictures=$(get_setting PICTURES_LOCATION)
+    if ! synced "$pictures"; then
+        to_terminal
+        {
+            echo "Not starting Immich yet: it was restored, and Syncthing has not fetched"
+            echo "$pictures back yet. Once it has, run: setup immich"
+            echo "(To start it anyway, delete $waiting.)"
+        } >&3
+        exit 0
+    fi
+    rm "$waiting"
 fi
 
 # Pulls missing images, and recreates only the containers whose config changed.

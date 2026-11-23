@@ -92,8 +92,16 @@ while sleep 60; do
 done </dev/null >/dev/null 2>&1 3>&- &
 keepalive=$!
 SETUP_LINE_OPEN=$(mktemp -u)
-trap 'kill "$keepalive" 2>/dev/null; rm -f "$SETUP_LINE_OPEN"' EXIT
-export SETUP_LINE_OPEN SETUP_STEP
+# Where the steps that restore from a backup keep its decrypted private key
+# (see lib/backup), so that its passphrase is asked for once per run. Deleted
+# as setup exits.
+runtime=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+if [[ ! -d $runtime || ! -w $runtime ]]; then
+    runtime=/tmp
+fi
+DOTFILES_BACKUP_IDENTITY=$(mktemp -u "$runtime/dotfiles-backup-identity.XXXXXX")
+trap 'kill "$keepalive" 2>/dev/null; rm -f "$SETUP_LINE_OPEN" "$DOTFILES_BACKUP_IDENTITY"' EXIT
+export SETUP_LINE_OPEN SETUP_STEP DOTFILES_BACKUP_IDENTITY
 
 log=~/dotfiles-setup.log
 printf '\n##### %s at %s\n' "setup${*:+ $*}" "$(date '+%F %T')" >>"$log"

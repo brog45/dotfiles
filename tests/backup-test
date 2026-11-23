@@ -1,0 +1,283 @@
+#!/usr/bin/bash
+
+# Tests for backup-host and the setup steps that restore from its backups
+# (restore-config, immich, ssh-key, ssh-host-keys, tailscale, restore-home),
+# as jeeves, in throwaway directories: the home directory, the system paths
+# (BACKUP_SYSROOT) and the backup drive (BACKUP_DIR), behind a fake sudo,
+# docker, systemctl and tailscale, with a test age key that has no passphrase.
+# It backs up a machine, restores onto a fresh one, and checks that every
+# item comes back, that a restore keeps what is there already and never
+# happens twice, that the machine backed up restores nothing, and that a
+# missing backup drive stops only the steps that would otherwise give the
+# machine a new identity. setup.d/syncthing's restore is checked by
+# tests/syncthing-restore-test. Needs age and zstd, and takes a few seconds.
+#
+# Usage: tests/backup-test
+
+# shellcheck disable=SC2088  # a ~ in a test's name is only text
+set -uo pipefail
+
+repo=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+
+for cmd in age age-keygen zstd; do
+    if ! command -v "$cmd" >/dev/null; then
+        echo "tests/backup-test needs $cmd (sudo apt install age zstd)" >&2
+        exit 1
+    fi
+done
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+passed=0
+failed=0
+
+check() {
+    local name=$1
+    shift
+    if "$@"; then
+        passed=$((passed + 1))
+    else
+        failed=$((failed + 1))
+        printf 'FAIL: %s\n' "$name"
+        printf '  output:\n    %s\n' "${out//$'\n'/$'\n'    }"
+    fi
+}
+
+# grep -q, negated.
+lacks() {
+    ! grep -q "$@"
+}
+
+# The fakes log each call to $LOG. sudo runs its command as you. docker's
+# compose lists two images, one by tag and one by digest, and its image
+# inspect gives their digests. tailscale reports a login once its state file
+# is there.
+mkdir "$work/bin"
+cat >"$work/bin/sudo" <<'EOF'
+#!/usr/bin/bash
+"$@"
+EOF
+cat >"$work/bin/docker" <<'EOF'
+#!/usr/bin/bash
+echo "docker $*" >>"$LOG"
+case "$*" in
+    *"config --images"*)
+        echo ghcr.io/immich-app/immich-server:v3
+        echo docker.io/valkey/valkey:9@sha256:aaaa
+        ;;
+    "image inspect"*immich-server*)
+        echo ghcr.io/immich-app/immich-server@sha256:1111
+        ;;
+    "image inspect"*valkey*)
+        echo valkey/valkey@sha256:aaaa
+        ;;
+esac
+EOF
+cat >"$work/bin/systemctl" <<'EOF'
+#!/usr/bin/bash
+echo "systemctl $*" >>"$LOG"
+EOF
+cat >"$work/bin/tailscale" <<'EOF'
+#!/usr/bin/bash
+echo "tailscale $*" >>"$LOG"
+if [ "$1" = status ]; then
+    if [ -f "$BACKUP_SYSROOT/var/lib/tailscale/tailscaled.state" ]; then
+        echo '{"BackendState": "Running"}'
+    else
+        echo '{"BackendState": "NeedsLogin"}'
+    fi
+fi
+EOF
+chmod +x "$work/bin/"*
+
+export PATH=$work/bin:$PATH LOG=$work/log DOTFILES_HOST=jeeves
+export BACKUP_DIR=$work/drive
+unset XDG_STATE_HOME XDG_RUNTIME_DIR DOTFILES_NO_RESTORE DOTFILES_BACKUP_IDENTITY
+
+# The test key, with the drive's files as backup-host would make them; the
+# encrypted identity.age is never read, BACKUP_IDENTITY being set.
+mkdir -p "$BACKUP_DIR/jeeves"
+age-keygen -o "$work/key.txt" 2>/dev/null
+age-keygen -y "$work/key.txt" >"$BACKUP_DIR/jeeves/recipient.txt"
+echo unused >"$BACKUP_DIR/jeeves/identity.age"
+export BACKUP_IDENTITY=$work/key.txt
+
+# Point HOME and the system paths at machine NAME's throwaway directories.
+#   machine NAME
+machine() {
+    export HOME=$work/$1/home BACKUP_SYSROOT=$work/$1/root BACKUP_REPO_DIR=$work/$1/repo
+    export IMMICH_DIR=$BACKUP_SYSROOT/srv/immich
+    mkdir -p "$HOME" "$BACKUP_SYSROOT" "$BACKUP_REPO_DIR"
+}
+
+# Run a setup step or backup-host, with $INPUT as its input.
+#   run COMMAND [ARG...]
+run() {
+    : >"$LOG"
+    out=$("$@" 2>&1 <<<"${INPUT:-}")
+    rc=$?
+}
+
+# The paths in an item's archive.
+#   listing ITEM
+listing() {
+    age -d -i "$work/key.txt" "$BACKUP_DIR/jeeves/$1.tar.zst.age" | zstd -dcq | tar -t
+}
+
+# The old machine.
+machine old
+mkdir -p "$HOME/.ssh" "$HOME/.config/app" "$HOME/src/repo" "$HOME/Maildir/new" \
+    "$HOME/.claude/projects/p" "$HOME/.local/state/syncthing"
+echo old-key >"$HOME/.ssh/id_ed25519"
+echo key-a >"$HOME/.ssh/authorized_keys"
+echo old-config >"$HOME/.ssh/config"
+echo setting >"$HOME/.config/app/settings"
+echo from-backup >"$HOME/.config/app/stowed"
+echo code >"$HOME/src/repo/main.c"
+echo mail >"$HOME/Maildir/new/1"
+echo memory >"$HOME/.claude/projects/p/memory.md"
+echo '{}' >"$HOME/.claude.json"
+echo '- a task' >"$BACKUP_REPO_DIR/todo.md"
+for f in cert.pem key.pem https-cert.pem https-key.pem config.xml; do
+    echo "$f" >"$HOME/.local/state/syncthing/$f"
+done
+mkdir -p "$HOME/.local/state/syncthing/index-v0.14.0.db"
+mkdir -p "$BACKUP_SYSROOT/etc/ssh" "$BACKUP_SYSROOT/var/lib/tailscale" "$IMMICH_DIR/postgres" \
+    "$IMMICH_DIR/tailscale"
+echo immich-node >"$IMMICH_DIR/tailscale/tailscaled.state"
+echo old-host-key >"$BACKUP_SYSROOT/etc/ssh/ssh_host_ed25519_key"
+echo old-host-key-pub >"$BACKUP_SYSROOT/etc/ssh/ssh_host_ed25519_key.pub"
+echo "not a key" >"$BACKUP_SYSROOT/etc/ssh/sshd_config"
+echo node >"$BACKUP_SYSROOT/var/lib/tailscale/tailscaled.state"
+echo 16 >"$IMMICH_DIR/postgres/PG_VERSION"
+printf 'DB_PASSWORD=secret\nPICTURES_LOCATION=%s/Pictures\nTS_AUTHKEY=\n' "$HOME" >"$IMMICH_DIR/.env"
+cp "$repo/hosts/jeeves/immich/compose.yaml" "$IMMICH_DIR/"
+
+# Backing up.
+run "$repo/backup-host"
+check 'backup succeeds' [ "$rc" -eq 0 ]
+for item in ssh-host-keys ssh tailscale syncthing immich maildir src config claude todo; do
+    check "$item is backed up" [ -s "$BACKUP_DIR/jeeves/$item.tar.zst.age" ]
+done
+check 'the archives are checked' grep -q 'decrypt and list' <<<"$out"
+check 'only the host keys are backed up from /etc/ssh' \
+    [ "$(listing ssh-host-keys | sort | tr '\n' ' ')" = 'etc/ssh/ssh_host_ed25519_key etc/ssh/ssh_host_ed25519_key.pub ' ]
+check "Syncthing's database is not backed up" lacks index-v0.14.0.db < <(listing syncthing)
+check 'Immich is stopped to back it up' grep -q "docker compose -f $IMMICH_DIR/compose.yaml stop" "$LOG"
+check 'Immich is started again' grep -q "docker compose -f $IMMICH_DIR/compose.yaml start" "$LOG"
+check 'the image digests are saved' grep -qx 'ghcr.io/immich-app/immich-server:v3 ghcr.io/immich-app/immich-server@sha256:1111' "$IMMICH_DIR/image-digests.txt"
+check 'a digest without docker.io/ is matched' grep -qx 'docker.io/valkey/valkey:9@sha256:aaaa valkey/valkey@sha256:aaaa' "$IMMICH_DIR/image-digests.txt"
+check 'the digests are in the archive' grep -qx immich/image-digests.txt < <(listing immich)
+check 'the machine backed up is marked as having nothing to restore' grep -q 'backed up from here' "$HOME/.local/state/dotfiles/restored/config"
+
+run "$repo/backup-host" --no-verify src
+check 'a second backup succeeds' [ "$rc" -eq 0 ]
+check 'the last archive is kept' [ -s "$BACKUP_DIR/jeeves/src.prev.tar.zst.age" ]
+check '--no-verify skips the check' lacks 'decrypt and list' <<<"$out"
+
+run "$repo/backup-host" nonsense
+check 'an item not in backup.txt is refused' [ "$rc" -ne 0 ]
+
+# The old machine restores nothing.
+for step in restore-config ssh-key ssh-host-keys tailscale restore-home immich; do
+    run "$repo/setup.d/$step"
+    check "the old machine's $step succeeds" [ "$rc" -eq 0 ]
+    check "the old machine's $step restores nothing" lacks Restoring <<<"$out"
+done
+
+# A fresh install, with things already made: a link from install-stow in
+# ~/.config, an authorized key, and its own host key.
+machine new
+mkdir -p "$HOME/.config/app" "$HOME/.ssh" "$BACKUP_SYSROOT/etc/ssh"
+echo stow-link >"$HOME/.config/app/stowed"
+echo key-b >"$HOME/.ssh/authorized_keys"
+echo fresh-host-key >"$BACKUP_SYSROOT/etc/ssh/ssh_host_ed25519_key"
+
+run "$repo/setup.d/restore-config"
+check 'restore-config succeeds' [ "$rc" -eq 0 ]
+check '~/.config is restored' grep -qx setting "$HOME/.config/app/settings"
+check 'a file already in ~/.config is kept' grep -qx stow-link "$HOME/.config/app/stowed"
+
+run "$repo/setup.d/immich"
+check 'immich succeeds' [ "$rc" -eq 0 ]
+check 'the database is restored' grep -qx 16 "$IMMICH_DIR/postgres/PG_VERSION"
+check "the database's password is restored" grep -qx DB_PASSWORD=secret "$IMMICH_DIR/.env"
+check 'the image is pulled by its digest' grep -qx 'docker pull ghcr.io/immich-app/immich-server@sha256:1111' "$LOG"
+check 'and tagged as the compose file names it' grep -qx 'docker tag ghcr.io/immich-app/immich-server@sha256:1111 ghcr.io/immich-app/immich-server:v3' "$LOG"
+check 'an image named by digest is not tagged' lacks 'docker tag valkey' "$LOG"
+check 'Immich waits for ~/Pictures' lacks 'compose.* up' "$LOG"
+check 'says how to start it' grep -q 'setup immich' <<<"$out"
+run "$repo/setup.d/immich"
+check 'Immich still waits on a rerun' lacks 'compose.* up' "$LOG"
+check 'the rerun restores nothing' lacks Restoring <<<"$out"
+rm "$HOME/.local/state/dotfiles/immich-waits-for-pictures"
+run "$repo/setup.d/immich"
+check 'Immich starts once it is told to' grep -q "docker compose -f $IMMICH_DIR/compose.yaml up -d" "$LOG"
+
+run "$repo/setup.d/ssh-key"
+check 'ssh-key succeeds' [ "$rc" -eq 0 ]
+check 'the SSH key is restored, not made' grep -qx old-key "$HOME/.ssh/id_ed25519"
+check 'ssh config is restored' grep -qx old-config "$HOME/.ssh/config"
+check 'the authorized key already there is kept' grep -qx key-b "$HOME/.ssh/authorized_keys"
+check "the backup's authorized key is added" grep -qx key-a "$HOME/.ssh/authorized_keys"
+
+INPUT=n run "$repo/setup.d/ssh-host-keys"
+check 'declining the host keys succeeds' [ "$rc" -eq 0 ]
+check 'declining keeps the host key' grep -qx fresh-host-key "$BACKUP_SYSROOT/etc/ssh/ssh_host_ed25519_key"
+INPUT=y run "$repo/setup.d/ssh-host-keys"
+check 'ssh-host-keys succeeds' [ "$rc" -eq 0 ]
+check 'the host key is restored' grep -qx old-host-key "$BACKUP_SYSROOT/etc/ssh/ssh_host_ed25519_key"
+check 'its public key is restored' grep -qx old-host-key-pub "$BACKUP_SYSROOT/etc/ssh/ssh_host_ed25519_key.pub"
+check 'nothing else in /etc/ssh is restored' [ ! -e "$BACKUP_SYSROOT/etc/ssh/sshd_config" ]
+check 'sshd is restarted' grep -qx 'systemctl try-restart ssh.service' "$LOG"
+
+run "$repo/setup.d/tailscale"
+check 'tailscale succeeds' [ "$rc" -eq 0 ]
+check 'the Tailscale node is restored' grep -qx node "$BACKUP_SYSROOT/var/lib/tailscale/tailscaled.state"
+check 'tailscaled is stopped to restore it' grep -qx 'systemctl stop tailscaled' "$LOG"
+check 'no new login is asked for' lacks 'tailscale up' "$LOG"
+
+run "$repo/setup.d/restore-home"
+check 'restore-home succeeds' [ "$rc" -eq 0 ]
+check '~/Maildir is restored' grep -qx mail "$HOME/Maildir/new/1"
+check '~/src is restored' grep -qx code "$HOME/src/repo/main.c"
+check "Claude Code's memory is restored" grep -qx memory "$HOME/.claude/projects/p/memory.md"
+check '~/.claude.json is restored' [ -f "$HOME/.claude.json" ]
+check "the repo's todo.md is restored" grep -qx -- '- a task' "$BACKUP_REPO_DIR/todo.md"
+
+# Rerunning restores nothing again, even what was deleted since.
+rm "$HOME/.config/app/settings" "$HOME/Maildir/new/1"
+for step in restore-config ssh-key ssh-host-keys tailscale restore-home; do
+    run "$repo/setup.d/$step"
+    check "rerunning $step succeeds" [ "$rc" -eq 0 ]
+    check "rerunning $step restores nothing" lacks Restoring <<<"$out"
+done
+check 'a file deleted since stays deleted' [ ! -e "$HOME/.config/app/settings" ]
+
+# A fresh install with no backup drive: the steps that would give the machine
+# a new identity stop; the others go on.
+machine nodrive
+export BACKUP_DIR=$work/no-drive
+run "$repo/setup.d/ssh-key"
+check 'ssh-key stops without the drive' [ "$rc" -ne 0 ]
+check 'and says to mount it' grep -q 'Mount the backup drive' <<<"$out"
+check 'and makes no key' [ ! -e "$HOME/.ssh/id_ed25519" ]
+run "$repo/setup.d/tailscale"
+check 'tailscale stops without the drive' [ "$rc" -ne 0 ]
+run "$repo/setup.d/restore-config"
+check 'restore-config goes on without the drive' [ "$rc" -eq 0 ]
+check 'and warns' grep -q 'not restoring config' <<<"$out"
+run "$repo/setup.d/restore-home"
+check 'restore-home goes on without the drive' [ "$rc" -eq 0 ]
+DOTFILES_NO_RESTORE=1 run "$repo/setup.d/ssh-key"
+check 'DOTFILES_NO_RESTORE=1 sets it up afresh' grep -q 'Creating SSH key' <<<"$out"
+
+# Another host restores nothing.
+machine larry
+DOTFILES_HOST=larry run "$repo/setup.d/restore-home"
+check 'another host succeeds' [ "$rc" -eq 0 ]
+check 'another host restores nothing' [ ! -e "$HOME/src" ]
+
+printf '%d passed, %d failed\n' "$passed" "$failed"
+[ "$failed" -eq 0 ]

@@ -1,0 +1,12 @@
+# What backup-host backs up on jeeves, to /mnt/backups/jeeves/, for setup to
+# restore on a new install. lib/backup says what each item holds.
+ssh-host-keys
+ssh
+tailscale
+syncthing
+immich
+maildir
+src
+config
+claude
+todo

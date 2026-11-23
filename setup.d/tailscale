@@ -3,24 +3,50 @@
 set -euo pipefail
 
 repo_root=$(dirname "$(dirname "$(readlink -f "$0")")")
+# shellcheck source=lib/host-lists
+. "$repo_root/lib/host-lists"
 # shellcheck source=lib/terminal
 . "$repo_root/lib/terminal"
+# shellcheck source=lib/backup
+. "$repo_root/lib/backup"
 
 # Add this machine to your tailnet, and let $USER run tailscale commands
 # without sudo. tailscale is installed by install-packages-leaves from
-# Tailscale's repository.
+# Tailscale's repository. On a new install of a host that is backed up (see
+# lib/backup), with no login yet, restore its Tailscale state instead, so that
+# it is the same node as before, with its name, addresses and `tailscale serve`
+# settings.
 
 if ! command -v tailscale >/dev/null; then
     echo "tailscale is not installed; run install-packages-leaves first" >&2
     exit 1
 fi
 
+backend_state() {
+    tailscale status --json 2>/dev/null | grep -o '"BackendState": *"[A-Za-z]*"' | grep -o '[A-Za-z]*"$' | tr -d '"' || true
+}
+
+state=$(backend_state)
+if [[ $state == NeedsLogin || $state == NoState ]] && restore_wanted tailscale; then
+    state_dir=$backup_sysroot/var/lib/tailscale
+    sudo systemctl stop tailscaled
+    # The new install's own state is a node that never logged in.
+    sudo rm -rf "$state_dir"
+    restore_item tailscale
+    sudo systemctl start tailscaled
+    for _ in $(seq 30); do
+        state=$(backend_state)
+        [[ -n $state && $state != NoState ]] && break
+        sleep 1
+    done
+    echo "Tailscale is back as $host's node: $state"
+fi
+
 # Set the operator first, so `tailscale up` below runs without sudo. `set`
 # changes only this preference, so it is safe to rerun on a connected machine.
 sudo tailscale set --operator="$USER"
 
-state=$(tailscale status --json | grep -o '"BackendState": *"[A-Za-z]*"' || true)
-if [[ $state == *'"Running"' ]]; then
+if [[ $(backend_state) == Running ]]; then
     echo "This machine is already on your tailnet"
 else
     # Prints a login URL to open in the browser, then waits for approval.

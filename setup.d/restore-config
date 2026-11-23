@@ -1,0 +1,22 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# On a new install of a host that is backed up (see lib/backup), restore
+# ~/.config from its backup, early, so that the later steps and apps find
+# their settings. A file already there, such as a link install-stow made, is
+# kept. Happens once: rerunning setup brings back nothing you deleted since.
+
+repo_root=$(dirname "$(dirname "$(readlink -f "$0")")")
+# shellcheck source=lib/host-lists
+. "$repo_root/lib/host-lists"
+# shellcheck source=lib/terminal
+. "$repo_root/lib/terminal"
+# shellcheck source=lib/backup
+. "$repo_root/lib/backup"
+
+if restore_wanted config; then
+    restore_item config --skip-old-files
+else
+    echo "No ~/.config to restore"
+fi

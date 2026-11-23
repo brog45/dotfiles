@@ -3,9 +3,45 @@
 set -euo pipefail
 
 # Create this machine's SSH identity key, used by github-ssh-key and
-# jeeves-ssh-key (jeeves.lan).
+# jeeves-ssh-key (jeeves.lan). On a new install of a host that is backed up
+# (see lib/backup), restore ~/.ssh from its backup instead: its keys, config,
+# authorized_keys and known_hosts. A file already in ~/.ssh is kept, except that
+# authorized_keys and known_hosts get the backup's lines they lack.
+
+repo_root=$(dirname "$(dirname "$(readlink -f "$0")")")
+# shellcheck source=lib/host-lists
+. "$repo_root/lib/host-lists"
+# shellcheck source=lib/terminal
+. "$repo_root/lib/terminal"
+# shellcheck source=lib/backup
+. "$repo_root/lib/backup"
 
 key=~/.ssh/id_ed25519
+
+if [ ! -f "$key" ] && restore_wanted ssh; then
+    echo "Restoring ~/.ssh from $(backup_archive ssh)"
+    tmp=$(mktemp -d)
+    # shellcheck disable=SC2016  # expanded when the script exits
+    backup_on_exit 'rm -rf "$tmp"'
+    backup_extract ssh "$tmp"
+    install -d -m 700 ~/.ssh
+    while IFS= read -r -d '' file; do
+        name=${file##*/}
+        dest=~/.ssh/$name
+        if [ ! -e "$dest" ]; then
+            cp -a "$file" "$dest"
+        elif [ "$name" = authorized_keys ] || [ "$name" = known_hosts ]; then
+            missing=$(grep -vxF -f "$dest" "$file" || true)
+            if [ -n "$missing" ]; then
+                printf '%s\n' "$missing" >>"$dest"
+                echo "Added the backup's lines to $dest"
+            fi
+        else
+            echo "Keeping $dest; not restoring the backup's"
+        fi
+    done < <(find "$tmp/.ssh" -mindepth 1 -maxdepth 1 -print0)
+    backup_mark ssh "restored from $(backup_archive ssh) on $(date '+%F %T')"
+fi
 
 if ! command -v ssh-keygen >/dev/null; then
     sudo apt install -y openssh-client
@@ -15,6 +51,6 @@ if [ -f "$key" ]; then
     echo "SSH key $key already exists"
 else
     echo "Creating SSH key $key (no passphrase)"
-    mkdir -p -m 700 ~/.ssh
+    install -d -m 700 ~/.ssh
     ssh-keygen -t ed25519 -N "" -f "$key"
 fi

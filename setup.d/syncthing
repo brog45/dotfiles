@@ -21,6 +21,13 @@ set -euo pipefail
 # The LAN's network and the tailnet's name are looked up on jeeves, so away from
 # home the devices are left for a rerun from home. If this machine's record of what jeeves has looks out of date, it offers to
 # have every connected machine send its full index again.
+#
+# On a new install of a host that is backed up (see lib/backup), with no
+# Syncthing config yet, it first restores this machine's Syncthing identity
+# and config from the backup, so that the other machines know it as before.
+# Not its database: with no record of ever having had files, it fetches them
+# all from the other machines, rather than taking its empty folders for
+# deletions to send them.
 
 script=$(readlink -f "$0")
 repo_root=$(dirname "$(dirname "$script")")
@@ -30,6 +37,8 @@ repo_root=$(dirname "$(dirname "$script")")
 . "$repo_root/lib/terminal"
 # shellcheck source=lib/syncthing
 . "$repo_root/lib/syncthing"
+# shellcheck source=lib/backup
+. "$repo_root/lib/backup"
 
 hub=jeeves
 hub_host=jeeves.lan
@@ -99,6 +108,12 @@ stop_syncthing() {
     echo "Syncthing did not shut down" >&2
     return 1
 }
+
+st_config=$HOME/.local/state/syncthing/config.xml
+if [ ! -e "$st_config" ] && [ ! -e ~/.config/syncthing/config.xml ] && restore_wanted syncthing; then
+    restore_item syncthing
+    st_make_folders "$st_config"
+fi
 
 # Start Syncthing now too, so it can be configured. On the first start, make
 # its keys and config first, without the default ~/Sync folder; this keeps any

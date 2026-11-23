@@ -41,7 +41,8 @@ EOF
 chmod +x "$work/bin/docker"
 
 export HOME=$work/home PATH=$work/bin:$PATH DOCKER_LOG=$work/docker.log
-export IMMICH_DIR=$work/srv/immich DOTFILES_HOST=jeeves
+# Restoring from a backup is tested in tests/backup-test.
+export IMMICH_DIR=$work/srv/immich DOTFILES_HOST=jeeves DOTFILES_NO_RESTORE=1
 mkdir -p "$HOME" "$work/srv"
 dir=$IMMICH_DIR
 env=$dir/.env

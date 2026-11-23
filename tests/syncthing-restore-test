@@ -1,0 +1,191 @@
+#!/usr/bin/bash
+
+# Checks what moving jeeves to a new install relies on (docs/jeeves-restore.md):
+# that Syncthing given back only its identity and config, as lib/backup
+# restores it, with st_make_folders making its folders, but not its database,
+# fetches every file again from another machine and deletes nothing there.
+# Two throwaway Syncthing instances, one as jeeves and one as a machine it
+# syncs with, listen on localhost only and announce nothing. jeeves first gets
+# a folder's files; then its home directory is wiped, as by a reinstall, the
+# backed-up files are put back, and it is started again. Needs Syncthing and
+# jq, needs no root, and runs in about 15 seconds.
+#
+# Restoring the database too is what this avoids: tried with Syncthing 1.27,
+# jeeves then took its empty folder for deletions, and the other machine
+# deleted every file.
+#
+# Usage: tests/syncthing-restore-test
+
+# The folder paths are written with a literal ~, as Syncthing keeps them.
+# shellcheck disable=SC2088
+
+set -uo pipefail
+
+repo=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+# shellcheck source=lib/syncthing
+. "$repo/lib/syncthing"
+
+for cmd in syncthing jq; do
+    if ! command -v "$cmd" >/dev/null; then
+        echo "$cmd is not installed" >&2
+        exit 1
+    fi
+done
+
+work=$(mktemp -d)
+# Keep Syncthing's config in the throwaway homes.
+unset XDG_CONFIG_HOME XDG_STATE_HOME STHOMEDIR STCONFDIR STDATADIR
+
+hub_home=$work/jeeves
+peer_home=$work/peer
+
+# The throwaway instances still running, found by their home directories.
+instances() {
+    local pid
+    for pid in $(pgrep -x syncthing); do
+        if grep -qzF "HOME=$work/" "/proc/$pid/environ" 2>/dev/null; then
+            echo "$pid"
+        fi
+    done
+}
+
+# Shut down the instance in home $1, and wait for it to exit.
+stop_instance() {
+    local _
+    HOME=$1 syncthing cli operations shutdown >/dev/null 2>&1
+    for _ in $(seq 40); do
+        if ! instances | xargs -r -I{} grep -qzF "HOME=$1" /proc/{}/environ 2>/dev/null; then
+            return
+        fi
+        sleep 0.25
+    done
+}
+trap 'instances | xargs -r kill; rm -rf "$work"' EXIT
+
+passed=0
+failed=0
+out=
+
+check() {
+    local name=$1
+    shift
+    if "$@"; then
+        passed=$((passed + 1))
+    else
+        failed=$((failed + 1))
+        printf 'FAIL: %s\n' "$name"
+    fi
+}
+
+# A free TCP port on localhost.
+free_port() {
+    local port
+    while :; do
+        port=$(shuf -i 30000-60000 -n 1)
+        [ -z "$(ss -Hltn "sport = :$port")" ] && echo "$port" && return
+    done
+}
+
+# Make an instance's keys and config, listening on localhost port $2 only and
+# announcing nothing.
+generate() {
+    HOME=$1 syncthing generate --no-default-folder >/dev/null 2>&1
+    sed -i -e "s|<listenAddress>default<|<listenAddress>tcp://127.0.0.1:$2<|" \
+        -e 's|<globalAnnounceServer>default<|<globalAnnounceServer>https://127.0.0.1:1/<|' \
+        -e 's|<\(globalAnnounceEnabled\|localAnnounceEnabled\|relaysEnabled\|natEnabled\)>true<|<\1>false<|' \
+        "$1/.local/state/syncthing/config.xml"
+}
+
+start() {
+    local _
+    HOME=$1 setsid -f syncthing serve --no-browser --no-restart </dev/null >>"$work/${1##*/}.log" 2>&1
+    for _ in $(seq 60); do
+        HOME=$1 syncthing cli show system >/dev/null 2>&1 && return 0
+        sleep 0.25
+    done
+    echo "Syncthing in $1 did not start; see:" >&2
+    cat "$work/${1##*/}.log" >&2
+    exit 1
+}
+
+hub() { HOME=$hub_home syncthing cli "$@"; }
+peer() { HOME=$peer_home syncthing cli "$@"; }
+
+# The files in home $1's ~/Docs, not counting Syncthing's own.
+files() {
+    find "$1/Docs" -type f -not -path '*/.st*' 2>/dev/null | sed "s|^$1/Docs/||" | LC_ALL=C sort
+}
+
+expected=$'a.txt\nc.bin\nsub/b.txt'
+
+# Wait up to 60 seconds for home $1's ~/Docs to hold the peer's files, the
+# ones made below. Not just whatever the peer has, which would also match if
+# both had lost them.
+wait_synced() {
+    local _
+    for _ in $(seq 240); do
+        [ "$(files "$1")" = "$expected" ] && return 0
+        sleep 0.25
+    done
+    return 1
+}
+
+# Started one after the other, so that the second takes another GUI port.
+hub_port=$(free_port)
+peer_port=$(free_port)
+mkdir -p "$peer_home" "$hub_home"
+generate "$peer_home" "$peer_port"
+start "$peer_home"
+generate "$hub_home" "$hub_port"
+start "$hub_home"
+hub_id=$(hub show system | jq -r .myID)
+peer_id=$(peer show system | jq -r .myID)
+
+# Addresses are added apart: Syncthing 1.27's `devices add --addresses` crashes.
+peer config devices add --device-id "$hub_id" --name jeeves
+peer config devices "$hub_id" addresses add "tcp://127.0.0.1:$hub_port"
+hub config devices add --device-id "$peer_id" --name peer
+hub config devices "$peer_id" addresses add "tcp://127.0.0.1:$peer_port"
+
+mkdir -p "$peer_home/Docs/sub" "$hub_home/Docs"
+echo one >"$peer_home/Docs/a.txt"
+echo two >"$peer_home/Docs/sub/b.txt"
+head -c 100000 /dev/urandom >"$peer_home/Docs/c.bin"
+peer config folders add --id docs --label Docs --path '~/Docs'
+peer config folders docs devices add --device-id "$hub_id"
+hub config folders add --id docs --label Docs --path '~/Docs'
+hub config folders docs devices add --device-id "$peer_id"
+
+check 'jeeves first gets the files' wait_synced "$hub_home"
+
+# Back up what lib/backup's syncthing item holds, and reinstall jeeves.
+state=.local/state/syncthing
+mkdir -p "$work/backup"
+for f in cert.pem key.pem https-cert.pem https-key.pem config.xml; do
+    [ -e "$hub_home/$state/$f" ] && cp -p "$hub_home/$state/$f" "$work/backup/"
+done
+stop_instance "$hub_home"
+rm -rf "$hub_home"
+mkdir -p "$hub_home/$state"
+cp -p "$work/backup/"* "$hub_home/$state/"
+
+out=$(HOME=$hub_home st_make_folders "$hub_home/$state/config.xml")
+check 'st_make_folders makes the folder' [ -d "$hub_home/Docs" ]
+check 'with its marker' [ -d "$hub_home/Docs/.stfolder" ]
+check 'and says so' grep -q 'Made ~/Docs' <<<"$out"
+
+start "$hub_home"
+check 'jeeves keeps its device ID' grep -q "$hub_id" < <(hub show system)
+check 'jeeves fetches every file again' wait_synced "$hub_home"
+check 'with the same contents' cmp -s "$peer_home/Docs/c.bin" "$hub_home/Docs/c.bin"
+
+# Give a deletion time to arrive, had there been one.
+sleep 3
+check 'the other machine keeps every file' [ "$(files "$peer_home")" = "$expected" ]
+check 'no conflict copies are made' [ -z "$(find "$peer_home/Docs" "$hub_home/Docs" -name '*.sync-conflict-*')" ]
+
+out=$(HOME=$hub_home st_make_folders "$hub_home/$state/config.xml")
+check 'st_make_folders leaves a folder with files alone' [ -z "$out" ]
+
+printf '%d passed, %d failed\n' "$passed" "$failed"
+[ "$failed" -eq 0 ]

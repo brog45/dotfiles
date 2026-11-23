@@ -12,6 +12,9 @@ apt-https
 apt-update
 install-firacode-nerd-font
 install-packages-leaves
+# After install-packages-leaves, which installs age, and before the steps
+# whose apps read ~/.config.
+restore-config
 docker-group
 # After install-packages-leaves, which installs Docker.
 immich
@@ -19,6 +22,7 @@ install-flatpaks
 remove-duplicate-user-flatpaks
 default-browser
 ssh-key
+ssh-host-keys
 github-ssh-key
 setup-git
 jeeves-ssh-key
@@ -26,6 +30,8 @@ jeeves-ssh-key
 # user-avatar, whose picture is in a synced folder.
 syncthing
 tailscale
+# Before install-claude-cli, so that Claude Code starts with its settings.
+restore-home
 install-vscode
 install-vscode-extensions
 install-claude-cli

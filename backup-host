@@ -1,0 +1,245 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Back up what setup cannot rebuild on this host, for setup to restore on a
+# new install: each item that hosts/<host>/backup.txt lists (lib/backup says
+# what each holds) goes to /mnt/backups/<host>/<item>.tar.zst.age, encrypted
+# with age. The first run makes the key pair there, asking for a passphrase
+# for the private key. After that, backing up needs no passphrase; the check
+# at the end, which decrypts and lists each new archive, asks for it once
+# (--no-verify skips the check). An archive replaces the last one only once it
+# is complete; the last one is kept as <item>.prev.tar.zst.age. Uses sudo for
+# the items only root can read. Immich is stopped while it is archived, and
+# the digests of its images are saved with it, so that a restore runs the
+# same versions.
+#
+# --final is for the last backup before a reinstall: it first stops the
+# ssh-fetch-mail timers, so that no more mail arrives here, and leaves them and
+# Immich stopped, for you to power off. BACKUP_DIR replaces /mnt/backups, and
+# need not be a mount point; see lib/backup for the other test settings.
+#
+# Usage: ./backup-host [--final] [--no-verify] [ITEM...]
+
+SCRIPT=$(readlink -f "$0")
+repo_root=$(dirname "$SCRIPT")
+# shellcheck source=lib/host-lists
+. "$repo_root/lib/host-lists"
+# shellcheck source=lib/terminal
+. "$repo_root/lib/terminal"
+# shellcheck source=lib/backup
+. "$repo_root/lib/backup"
+
+usage() {
+    sed -n 's/^# Usage: //p' "$SCRIPT" >&2
+    exit 2
+}
+
+final=false
+verify=true
+items=()
+for arg in "$@"; do
+    case $arg in
+        --final) final=true ;;
+        --no-verify) verify=false ;;
+        -h | --help) usage ;;
+        -*) usage ;;
+        *) items+=("$arg") ;;
+    esac
+done
+
+if [[ ${#backup_items[@]} -eq 0 ]]; then
+    echo "hosts/$host/backup.txt lists nothing to back up" >&2
+    exit 1
+fi
+if [[ ${#items[@]} -eq 0 ]]; then
+    items=("${backup_items[@]}")
+fi
+for item in "${items[@]}"; do
+    if ! backup_listed "$item"; then
+        echo "hosts/$host/backup.txt does not list $item" >&2
+        exit 1
+    fi
+done
+
+for cmd in age age-keygen zstd; do
+    if ! command -v "$cmd" >/dev/null; then
+        echo "$cmd is not installed (sudo apt install age zstd)" >&2
+        exit 1
+    fi
+done
+
+# Without the drive, /mnt/backups is just a directory on this disk.
+if [[ -z ${BACKUP_DIR:-} ]] && ! mountpoint -q "$backup_root"; then
+    echo "The backup drive is not mounted at $backup_root" >&2
+    exit 1
+fi
+mkdir -p "$backup_dir"
+
+recipient=$backup_dir/recipient.txt
+identity=$backup_dir/identity.age
+if [[ ! -e $recipient && ! -e $identity ]]; then
+    to_terminal
+    {
+        echo "Making the key pair for $host's backups in $backup_dir."
+        echo "Choose a passphrase for the private key, and keep it safe (in KeePassXC):"
+        echo "without it the backups cannot be read."
+    } >&3
+    # The unencrypted key stays in memory.
+    key=$(age-keygen 2>/dev/null)
+    age-keygen -y <<<"$key" >"$recipient.new"
+    age -p -o "$identity.new" <<<"$key"
+    unset key
+    mv "$identity.new" "$identity"
+    mv "$recipient.new" "$recipient"
+    echo "Made $recipient and $identity"
+elif [[ ! -e $recipient ]]; then
+    echo "$identity has no $recipient next to it; recreate it with: age-keygen -y" >&2
+    exit 1
+elif [[ ! -e $identity ]]; then
+    echo "$recipient has no $identity next to it, so these backups could not be read" >&2
+    exit 1
+fi
+
+written=()
+
+# Archive the item NAME, replacing its last archive once the new one is
+# complete. tar's status 1 means that a file changed while it was read, which
+# is normal for a live directory, so it only warns.
+#   archive_item NAME
+archive_item() {
+    local name=$1 pattern file out tmp tar=(tar)
+    local files=()
+    item_spec "$name"
+    for pattern in "${item_paths[@]}"; do
+        while IFS= read -r file; do
+            files+=("$file")
+        done < <(cd "$item_base" || exit; compgen -G "$pattern" || true)
+    done
+    if [[ ${#files[@]} -eq 0 ]]; then
+        echo "Warning: nothing to back up for $name in $item_base; keeping its last archive" >&2
+        return 0
+    fi
+    if [[ $item_root == yes ]]; then
+        tar=(sudo tar)
+    fi
+    out=$(backup_archive "$name")
+    tmp=$backup_dir/.$name.tar.zst.age.new
+    echo "Backing up $name: ${files[*]} in $item_base"
+    set +e
+    "${tar[@]}" -C "$item_base" --numeric-owner -cf - -- "${files[@]}" | zstd -q -T0 | age -R "$recipient" -o "$tmp"
+    local status=("${PIPESTATUS[@]}")
+    set -e
+    if [[ ${status[0]} -gt 1 || ${status[1]} -ne 0 || ${status[2]} -ne 0 ]]; then
+        rm -f "$tmp"
+        echo "Backing up $name failed (tar, zstd, age: ${status[*]})" >&2
+        exit 1
+    fi
+    if [[ ${status[0]} -eq 1 ]]; then
+        echo "Warning: some of $name changed while it was archived" >&2
+    fi
+    if [[ -e $out ]]; then
+        mv -f "$out" "$backup_dir/$name.prev.tar.zst.age"
+    fi
+    mv "$tmp" "$out"
+    written+=("$name")
+    # This machine is the one backed up, so it has nothing to restore.
+    backup_mark "$name" "backed up from here to $out on $(date '+%F %T')"
+}
+
+# An image name without docker.io/ or library/, which Docker leaves out of
+# its digests.
+#   short_repo NAME
+short_repo() {
+    local repo=${1#docker.io/}
+    echo "${repo#library/}"
+}
+
+# Write "IMAGE DIGEST" for each image in Immich's compose file, DIGEST being
+# what IMAGE was pulled as: setup.d/immich pulls those back.
+image_digests() {
+    local ref repo digest candidate
+    while IFS= read -r ref; do
+        repo=$(short_repo "${ref%%[:@]*}")
+        digest=
+        while IFS= read -r candidate; do
+            if [[ $(short_repo "${candidate%%@*}") == "$repo" ]]; then
+                digest=$candidate
+                break
+            fi
+        done < <("${docker[@]}" image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$ref")
+        if [[ -z $digest ]]; then
+            echo "Cannot find the digest $ref was pulled as" >&2
+            return 1
+        fi
+        printf '%s %s\n' "$ref" "$digest"
+    done < <("${docker[@]}" compose -f "$immich_compose" config --images)
+}
+
+start_immich() {
+    echo "Starting Immich again"
+    "${docker[@]}" compose -f "$immich_compose" start
+}
+
+# Archive Immich with its stack stopped, so that its database is consistent,
+# with the digests of the images it runs.
+backup_immich() {
+    local dir=${IMMICH_DIR:-$backup_sysroot/srv/immich}
+    immich_compose=$dir/compose.yaml
+    if [[ ! -f $immich_compose ]]; then
+        archive_item immich
+        return
+    fi
+    if docker info >/dev/null 2>&1; then
+        docker=(docker)
+    else
+        docker=(sudo docker)
+    fi
+    image_digests >"$dir/image-digests.txt.new"
+    if [[ ! -s $dir/image-digests.txt.new ]]; then
+        rm -f "$dir/image-digests.txt.new"
+        echo "Cannot list the images in $immich_compose" >&2
+        exit 1
+    fi
+    mv "$dir/image-digests.txt.new" "$dir/image-digests.txt"
+    echo "Stopping Immich"
+    "${docker[@]}" compose -f "$immich_compose" stop
+    if ! $final; then
+        # Even if archiving fails.
+        backup_on_exit start_immich
+    fi
+    archive_item immich
+}
+
+if $final; then
+    echo "Stopping ssh-fetch-mail's timers, so that no more mail arrives here"
+    systemctl --user stop 'ssh-fetch-mail@*.timer' 'ssh-fetch-mail@*.service'
+fi
+
+for item in "${items[@]}"; do
+    if [[ $item == immich ]]; then
+        backup_immich
+    else
+        archive_item "$item"
+    fi
+done
+
+if $verify && [[ ${#written[@]} -gt 0 ]]; then
+    backup_load_identity
+    for item in "${written[@]}"; do
+        if ! age -d -i "$backup_key" "$(backup_archive "$item")" | zstd -dcq | tar -t >/dev/null; then
+            echo "$(backup_archive "$item") does not decrypt and list" >&2
+            exit 1
+        fi
+    done
+    echo "Checked: ${written[*]} decrypt and list"
+fi
+
+if $final; then
+    to_terminal
+    {
+        echo "Final backup of $host done, in $backup_dir."
+        echo "Immich and the ssh-fetch-mail timers are stopped. Power off now (sudo poweroff),"
+        echo "and do not start this install again: the new one takes over its identity."
+    } >&3
+fi

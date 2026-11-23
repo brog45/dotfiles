@@ -1,8 +1,8 @@
 # shellcheck shell=bash
 # Syncthing's REST API, for what `syncthing cli` has no command for, such as
-# ignore patterns and what another device needs. Sourced by setup.d/syncthing
-# and syncthing-need. Needs curl, and Syncthing running when st_api_init is
-# called.
+# ignore patterns and what another device needs, and making restored folders.
+# Sourced by setup.d/syncthing, setup.d/immich and syncthing-need. Needs curl,
+# and Syncthing running when st_api_init is called.
 
 # Find this user's Syncthing GUI and its API key. Call once, before st_api.
 st_api_init() {
@@ -20,6 +20,22 @@ st_api() {
     local path=$1
     shift
     curl -fsS -k -H "X-API-Key: $st_api_key" "$st_gui_url/rest/$path" "$@"
+}
+
+# Make each folder in the Syncthing config file CONFIG that is missing or
+# empty, with the .stfolder marker Syncthing needs before it will use a
+# folder, so that restored folders fill from the other machines. Reads the
+# file, so Syncthing need not be running.
+#   st_make_folders CONFIG
+st_make_folders() {
+    local path dir
+    while IFS= read -r path; do
+        dir=${path/#\~/$HOME}
+        if [ ! -e "$dir" ] || [ -z "$(find "$dir" -mindepth 1 -print -quit)" ]; then
+            mkdir -p "$dir/.stfolder"
+            echo "Made $path for Syncthing to fill"
+        fi
+    done < <(sed -n 's/.*<folder [^>]*path="\([^"]*\)".*/\1/p' "$1")
 }
 
 # S, percent-encoded for use in a query string.

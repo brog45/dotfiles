@@ -233,6 +233,35 @@ restarts them at every boot. The step does not update the images to newer
 versions; to do that, run `docker compose pull` and `docker compose up -d` in
 `/srv/immich`.
 
+## Backing up and restoring a host
+
+`./backup-host` backs up what `setup` cannot rebuild on a host, so that a new
+install comes back as the same machine: the items its
+`hosts/<hostname>/backup.txt` lists, which only jeeves has (SSH host and user
+keys, Tailscale and Syncthing identities, Immich, `~/Maildir`, `~/src`,
+`~/.config`, Claude Code's `~/.claude`, and this repo's `todo.md`, which git
+ignores). Each goes to
+`/mnt/backups/<hostname>/<item>.tar.zst.age`, compressed with zstd and
+encrypted with age. The first run makes the key pair there and asks for a
+passphrase for the private key; after that, backing up needs none, and the
+check at the end, which decrypts and lists each new archive, asks for it once
+(`--no-verify` skips it). Name items to back up only those. `--final` is for
+the last backup before a reinstall: it also stops the ssh-fetch-mail timers,
+and leaves them and Immich stopped. It needs `age` and `zstd`.
+
+On a new install, the setup steps that set each thing up restore it first,
+asking for the passphrase once: `restore-config` (`~/.config`, keeping files
+already there), `immich`, `ssh-key`, `ssh-host-keys` (after asking),
+`syncthing` (its identity and config, not its database, so that it fetches
+the folders back rather than deleting them elsewhere), `tailscale` and
+`restore-home` (`~/Maildir`, `~/src`, `~/.claude`, `todo.md`). A step
+restores only what is not set up yet, and each item at most once, so
+rerunning `setup`, or running it on the machine backed up, restores nothing. Without the drive, the
+steps that would otherwise give the machine a new identity stop; set
+`DOTFILES_NO_RESTORE=1` to set it up afresh. `lib/backup` has the details,
+`docs/jeeves-restore.md` the plan for moving jeeves into a VM, and
+`docs/moxie.md` the decisions for moxie, the Proxmox host it moves to.
+
 ## Updating the lists
 
 Each list `setup` installs from comes in up to three parts:
@@ -288,6 +317,19 @@ that has files, rerunning, refusing a folder already synced under another
 ID, adding the ignore patterns, keeping any others, on both machines and away
 from home, and enabling jeeves's system service, behind a fake `sudo` and
 `systemctl`. It needs Syncthing, `jq` and `curl`, and takes about 8
+seconds.
+
+`tests/backup-test` checks `backup-host` and the setup steps that restore
+from its backups, as jeeves, in throwaway directories behind a fake `sudo`,
+`docker`, `systemctl` and `tailscale`: backing up a machine and restoring
+onto a fresh one, keeping what is there already, never restoring twice or on
+the machine backed up, and stopping without the drive only where a new
+identity would result. It needs `age` and `zstd`, and takes a few seconds.
+
+`tests/syncthing-restore-test` checks, with two throwaway Syncthing
+instances, that Syncthing given back only its identity and config, as
+`setup` restores it, fetches a folder's files again from another machine and
+deletes nothing there. It needs Syncthing and `jq`, and takes about 15
 seconds.
 
 `tests/packages-leaves-docker-test` checks `update-packages-leaves` and

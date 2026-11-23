@@ -1,0 +1,223 @@
+# shellcheck shell=bash
+# Backups of what setup cannot rebuild on a host (keys, logins, data), for
+# moving it to a new install: backup-host writes them, and the setup.d steps
+# that set each thing up restore it from them. Sourced by both; the sourcing
+# script must set repo_root and source lib/host-lists and lib/terminal first.
+# docs/jeeves-restore.md has the design.
+#
+# hosts/<host>/backup.txt lists the items backed up for a host; item_spec
+# defines each. Each item is one archive, /mnt/backups/<host>/<item>.tar.zst.age:
+# a tar archive, compressed with zstd, encrypted with age to the public key in
+# recipient.txt next to it. The private key is identity.age there, encrypted
+# with a passphrase.
+#
+# A step restores an item at most once on a machine, and only when what it
+# sets up is not set up yet. ~/.local/state/dotfiles/restored/<item> records
+# that it was restored, or, on the machine it is backed up from, that there is
+# nothing to restore. When a host lists an item but its archive is missing
+# because the backup drive is, a step stops rather than give the machine a new
+# identity (a new SSH key, Tailscale node or Syncthing device, an empty
+# Immich); for the other items it warns and goes on. DOTFILES_NO_RESTORE=1
+# turns restoring off.
+#
+# For tests: BACKUP_DIR replaces /mnt/backups, BACKUP_SYSROOT goes before the
+# system paths (/etc, /var, /srv), BACKUP_REPO_DIR replaces this repo for the
+# todo item, and BACKUP_IDENTITY names an unencrypted private key to use
+# instead of identity.age.
+#
+# Needs age, zstd and GNU tar.
+
+# shellcheck disable=SC2154  # host and host_dir come from lib/host-lists
+{
+    backup_root=${BACKUP_DIR:-/mnt/backups}
+    backup_dir=$backup_root/$host
+    backup_sysroot=${BACKUP_SYSROOT:-}
+    backup_marks=${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/restored
+    mapfile -t backup_items < <(read_list "$host_dir/backup.txt")
+}
+
+# Commands to run when the sourcing script exits. Add them with
+# backup_on_exit, rather than setting an EXIT trap, which would replace this
+# one.
+backup_exit_cmds=()
+#   backup_on_exit COMMAND
+backup_on_exit() {
+    backup_exit_cmds+=("$1")
+}
+backup_cleanup() {
+    local cmd
+    for cmd in ${backup_exit_cmds[@]+"${backup_exit_cmds[@]}"}; do
+        eval "$cmd" || true
+    done
+}
+trap backup_cleanup EXIT
+
+# Set, for the item NAME: item_paths, glob patterns relative to item_base,
+# which backup-host expands there; item_root, yes if reading and writing them
+# needs root; and item_required, yes if a step must stop rather than set it up
+# afresh when its archive is missing.
+#   item_spec NAME
+# shellcheck disable=SC2034  # the item_ variables are for the callers
+item_spec() {
+    item_base=$HOME
+    item_root=no
+    item_required=no
+    case $1 in
+        ssh-host-keys)
+            item_base=$backup_sysroot/ item_root=yes
+            item_paths=('etc/ssh/ssh_host_*')
+            ;;
+        ssh)
+            item_required=yes
+            item_paths=(.ssh)
+            ;;
+        tailscale)
+            item_base=$backup_sysroot/ item_root=yes item_required=yes
+            item_paths=(var/lib/tailscale)
+            ;;
+        syncthing)
+            # Its identity and config, not its database: see setup.d/syncthing.
+            item_required=yes
+            item_paths=(.local/state/syncthing/{cert.pem,key.pem,https-cert.pem,https-key.pem,config.xml})
+            ;;
+        immich)
+            # Some of the Tailscale container's files are root's.
+            local dir=${IMMICH_DIR:-$backup_sysroot/srv/immich}
+            item_base=$(dirname "$dir") item_root=yes item_required=yes
+            item_paths=("$(basename "$dir")")
+            ;;
+        maildir) item_paths=(Maildir) ;;
+        src) item_paths=(src) ;;
+        config) item_paths=(.config) ;;
+        claude) item_paths=(.claude .claude.json) ;;
+        todo)
+            # The repo's to-do list, which git ignores, so a clone lacks it.
+            item_base=${BACKUP_REPO_DIR:-$repo_root}
+            item_paths=(todo.md)
+            ;;
+        *)
+            echo "lib/backup: no such item: $1" >&2
+            return 1
+            ;;
+    esac
+}
+
+# The archive of the item NAME.
+#   backup_archive NAME
+backup_archive() {
+    echo "$backup_dir/$1.tar.zst.age"
+}
+
+# Succeed if this host's backup.txt lists the item NAME.
+#   backup_listed NAME
+backup_listed() {
+    local item
+    for item in ${backup_items[@]+"${backup_items[@]}"}; do
+        [[ $item == "$1" ]] && return 0
+    done
+    return 1
+}
+
+# Record that the item NAME needs no restoring on this machine any more.
+#   backup_mark NAME TEXT
+backup_mark() {
+    mkdir -p "$backup_marks"
+    echo "$2" >"$backup_marks/$1"
+}
+
+# Succeed if the item NAME should be restored now: this host backs it up, it
+# has not been restored or backed up here before, restoring is not turned
+# off, and its archive is there. Call only once the thing it holds is known not
+# to be set up. Stops the script if a required item's archive is missing
+# because the backup drive is.
+#   restore_wanted NAME
+restore_wanted() {
+    local name=$1 archive
+    backup_listed "$name" || return 1
+    [[ -z ${DOTFILES_NO_RESTORE:-} ]] || return 1
+    [[ ! -e $backup_marks/$name ]] || return 1
+    item_spec "$name"
+    archive=$(backup_archive "$name")
+    if [[ -f $archive ]]; then
+        return 0
+    fi
+    if [[ ! -d $backup_dir ]]; then
+        if [[ $item_required == yes ]]; then
+            echo "$host's $name would be restored from $backup_dir, which is missing." >&2
+            echo "Mount the backup drive, or set DOTFILES_NO_RESTORE=1 to set it up afresh." >&2
+            exit 1
+        fi
+        echo "Warning: $backup_dir is missing; not restoring $name (mount the backup drive and rerun)" >&2
+        return 1
+    fi
+    echo "Warning: there is no $archive; setting up $name afresh" >&2
+    return 1
+}
+
+# A directory for secrets that lasts only while you are logged in, or /tmp.
+backup_runtime_dir() {
+    local dir=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+    if [[ -d $dir && -w $dir ]]; then
+        echo "$dir"
+    else
+        echo /tmp
+    fi
+}
+
+# Set backup_key to an unencrypted copy of the private key, asking for its
+# passphrase the first time. Under setup, which names the copy in
+# DOTFILES_BACKUP_IDENTITY and deletes it as it exits, it asks once per run;
+# otherwise the copy is deleted when this script exits.
+backup_load_identity() {
+    if [[ -n ${BACKUP_IDENTITY:-} ]]; then
+        backup_key=$BACKUP_IDENTITY
+        return
+    fi
+    if [[ -n ${DOTFILES_BACKUP_IDENTITY:-} ]]; then
+        backup_key=$DOTFILES_BACKUP_IDENTITY
+    elif [[ -z ${backup_key:-} ]]; then
+        backup_key=$(mktemp -u "$(backup_runtime_dir)/dotfiles-backup-identity.XXXXXX")
+        # shellcheck disable=SC2016  # expanded when the script exits
+        backup_on_exit 'rm -f "$backup_key"'
+    fi
+    if [[ ! -s $backup_key ]]; then
+        to_terminal
+        echo "Enter the passphrase for $host's backups ($backup_dir/identity.age)" >&3
+        if ! (umask 077 && age -d -o "$backup_key" "$backup_dir/identity.age"); then
+            rm -f "$backup_key"
+            echo "Cannot decrypt $backup_dir/identity.age" >&2
+            return 1
+        fi
+    fi
+}
+
+# Extract the item NAME's archive into DIR, or where it was backed up from if
+# DIR is empty, as root for an item that needs root, keeping owners and
+# modes. Other arguments go to tar, such as --skip-old-files.
+#   backup_extract NAME DIR [TAR-ARG...]
+backup_extract() {
+    local name=$1 dir=$2 tar=(tar)
+    shift 2
+    item_spec "$name"
+    dir=${dir:-$item_base}
+    if [[ $item_root == yes ]]; then
+        tar=(sudo tar)
+        sudo mkdir -p "$dir"
+    else
+        mkdir -p "$dir"
+    fi
+    backup_load_identity
+    age -d -i "$backup_key" "$(backup_archive "$name")" | zstd -dcq |
+        "${tar[@]}" -x -p --numeric-owner -C "$dir" "$@"
+}
+
+# Restore the item NAME where it was backed up from, and record that it was.
+# Other arguments go to tar.
+#   restore_item NAME [TAR-ARG...]
+restore_item() {
+    local name=$1
+    shift
+    echo "Restoring $name from $(backup_archive "$name")"
+    backup_extract "$name" "" "$@"
+    backup_mark "$name" "restored from $(backup_archive "$name") on $(date '+%F %T')"
+}
