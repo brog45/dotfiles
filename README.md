@@ -102,6 +102,11 @@ enabled, and started when it is new or changed. jeeves uses one,
 `mnt-backups.mount`, to mount its USB backup disk at `/mnt/backups` whenever
 it is plugged in, without boot waiting for it.
 
+A file named `linger` in a host's profiles or `hosts/<hostname>/` makes the
+`linger` setup script let your user services run with nobody logged in
+(`sudo loginctl enable-linger`). jeeves has one, for the tmux running its
+Claude Code environments and for ssh-fetch-mail's timers.
+
 ## Syncthing
 
 The `syncthing` setup script adds Syncthing to your startup applications,

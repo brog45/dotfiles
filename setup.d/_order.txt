@@ -7,6 +7,7 @@
 install-stow
 remove-and-block-packages
 install-etc
+linger
 # Before apt-update, which fails on an HTTPS repository without it.
 apt-https
 apt-update

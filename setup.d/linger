@@ -1,0 +1,33 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Let your user services run with nobody logged in (systemd's "lingering"), on
+# a host whose hosts/<host>/ or profiles have a file named linger: on jeeves,
+# the tmux running the Claude Code environments and ssh-fetch-mail's timers.
+# Without it they stop when your last login ends. It is kept in
+# /var/lib/systemd/linger/, outside anything a backup restores, so a new
+# install needs this step. Uses sudo: without a desktop login, polkit refuses
+# `loginctl enable-linger` from you.
+
+repo_root=$(dirname "$(dirname "$(readlink -f "$0")")")
+# shellcheck source=lib/host-lists
+. "$repo_root/lib/host-lists"
+
+wanted=
+for dir in "${list_dirs[@]}"; do
+    if [ -e "$dir/linger" ]; then
+        wanted=1
+    fi
+done
+if [ -z "$wanted" ]; then
+    echo "No linger file for $host; leaving lingering as it is"
+    exit 0
+fi
+
+if [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" = yes ]; then
+    echo "Your user services already run with nobody logged in"
+else
+    echo "Letting your user services run with nobody logged in"
+    sudo loginctl enable-linger "$USER"
+fi

@@ -1,0 +1,3 @@
+Makes the linger setup step let your user services run on jeeves with nobody
+logged in: the tmux running the Claude Code environments, and ssh-fetch-mail's
+timers. Only the file's presence matters.
