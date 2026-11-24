@@ -89,7 +89,10 @@ per line. A name with no `profiles/` directory is an error, not skipped.
 The setup steps that install desktop apps (flatpaks, VS Code and its
 extensions, the FiraCode Nerd Font) skip on a machine with no desktop
 environment installed, whatever its profiles. The ones that configure a
-desktop or an app skip when it is missing.
+desktop or an app skip when it is missing. The `install-opa` step, which puts
+Open Policy Agent's release binary in `/usr/local/bin` because Debian and
+Ubuntu do not package it, runs only on hosts with the `dev` profile.
+`do-updates` reruns it, so opa is updated along with everything else.
 
 ## System config
 

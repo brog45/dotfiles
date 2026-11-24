@@ -37,6 +37,7 @@ restore-home
 install-vscode
 install-vscode-extensions
 install-claude-cli
+install-opa
 rustup
 zen-keepassxc
 zen-settings

@@ -1,0 +1,57 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+# Install Open Policy Agent (opa) into /usr/local/bin on hosts with the dev
+# profile. Debian and Ubuntu do not package it, so this follows OPA's own
+# Linux instructions: download the release binary and make it executable. It
+# also checks the binary against the SHA-256 file OPA publishes beside it, and
+# on a rerun replaces an older opa with the latest release.
+
+repo_root=$(dirname "$(dirname "$(readlink -f "$0")")")
+# shellcheck source=lib/host-lists
+. "$repo_root/lib/host-lists"
+
+if ! printf '%s\n' ${profiles[@]+"${profiles[@]}"} | grep -qx dev; then
+    echo "$host does not use the dev profile; skipping opa"
+    exit 0
+fi
+
+# OPA's instructions name opa_linux_amd64; it builds no binary for i686.
+if [ "$(uname -m)" != x86_64 ]; then
+    echo "No opa build for $(uname -m); skipping opa"
+    exit 0
+fi
+file=opa_linux_amd64
+bin=/usr/local/bin/opa
+
+if ! command -v curl >/dev/null; then
+    sudo apt install -y curl
+fi
+
+# The tag the latest release redirects to, such as v1.22.4. Downloading by
+# tag, not by "latest", keeps the binary and its checksum from the same
+# release even if a new one comes out between the two downloads.
+tag=$(curl -fsS -o /dev/null -w '%{redirect_url}' https://github.com/open-policy-agent/opa/releases/latest)
+tag=${tag##*/}
+if [[ ! $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Could not find the latest opa release (got '$tag')" >&2
+    exit 1
+fi
+
+installed=$("$bin" version 2>/dev/null | sed -n 's/^Version: //p' || true)
+if [ "v$installed" = "$tag" ]; then
+    echo "opa $installed is already installed"
+    exit 0
+fi
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+echo "Installing opa ${tag#v}${installed:+ (replacing $installed)}"
+base=https://openpolicyagent.org/downloads/$tag
+curl -fsSL -o "$tmp/$file" "$base/$file"
+curl -fsSL -o "$tmp/$file.sha256" "$base/$file.sha256"
+(cd "$tmp" && sha256sum --check --quiet "$file.sha256")
+sudo install -D -o root -g root -m 755 "$tmp/$file" "$bin"
+"$bin" version | head -n 1
