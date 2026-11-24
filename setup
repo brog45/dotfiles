@@ -58,7 +58,7 @@ fi
 if ! groups | tr ' ' '\n' | grep -qx sudo; then
     echo "Adding $USER to the sudo group"
     echo "Enter the root password"
-    su -c "usermod -aG sudo $USER"
+    su -c "/usr/sbin/usermod -aG sudo $USER"
 
     echo 'Using "exec su ..." to continue with the sudo group'
     echo "Enter your own password"

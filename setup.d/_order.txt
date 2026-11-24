@@ -27,10 +27,11 @@ ssh-host-keys
 github-ssh-key
 setup-git
 jeeves-ssh-key
+# syncthing setup needs tailscale
+tailscale
 # After jeeves-ssh-key, which lets it configure jeeves, and well before
 # user-avatar, whose picture is in a synced folder.
 syncthing
-tailscale
 # Before install-claude-cli, so that Claude Code starts with its settings.
 restore-home
 install-vscode

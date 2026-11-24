@@ -17,6 +17,6 @@ if groups "$USER" | tr ' ' '\n' | grep -qx docker; then
     echo "User $USER is a member of the docker group"
 else
     echo "Adding $USER to the docker group"
-    sudo usermod -aG docker "$USER"
+    sudo /usr/sbin/usermod -aG docker "$USER"
     echo "Log out and back in to use docker without sudo"
 fi
