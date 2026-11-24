@@ -4,6 +4,9 @@ set -euo pipefail
 
 sudo apt update
 sudo apt full-upgrade --auto-remove
-sudo flatpak update --system -y
-flatpak update --user -y
+
+if command -v flatpak 2>/dev/null; then
+    sudo flatpak update --system -y
+    flatpak update --user -y
+fi
 
