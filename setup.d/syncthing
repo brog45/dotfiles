@@ -196,11 +196,18 @@ tailscale_networks=(100.64.0.0/10 fd7a:115c:a1e0::/48)
 
 # The network of this machine's default route. Run on jeeves, which is always at
 # home, to find the home LAN: this machine may be on someone else's network.
+# Not filtered by protocol: the kernel adds the subnet's route for a static
+# address (proto kernel), but NetworkManager adds it for a DHCP lease (proto
+# dhcp). Of the device's link routes, the one with the default route's source
+# address is preferred.
 home_lan() {
-    local dev
-    dev=$(ip -j -4 route show default | jq -r '.[0].dev // empty')
+    local default dev src
+    default=$(ip -j -4 route show default)
+    dev=$(jq -r '.[0].dev // empty' <<<"$default")
+    src=$(jq -r '.[0].prefsrc // empty' <<<"$default")
     if [ -n "$dev" ]; then
-        ip -j -4 route show dev "$dev" proto kernel scope link | jq -r '.[0].dst // empty'
+        ip -j -4 route show dev "$dev" scope link |
+            jq -r --arg s "$src" '(map(select(.prefsrc == $s)) + .)[0].dst // empty'
     fi
 }
 
