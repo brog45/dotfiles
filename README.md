@@ -63,8 +63,8 @@ fd 3, which is the terminal under `setup` and stdout when run on its own.
 The `install-stow` setup script links files into your home directory with GNU
 Stow, from `stow/` at the repo root (every machine), from `stow/` in each of
 the machine's profiles, and from `hosts/<hostname>/stow/`. For example,
-`profiles/desktop/stow/bin/rdp-tunnel` becomes `~/bin/rdp-tunnel`. A file may
-be in only one of these trees.
+`profiles/desktop/stow/.local/bin/rdp-tunnel` becomes
+`~/.local/bin/rdp-tunnel`. A file may be in only one of these trees.
 
 Stow links only the files (`--no-folding`), creating real directories for
 them. To move a file to another tree, `git mv` it and rerun `install-stow`:

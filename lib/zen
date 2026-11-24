@@ -1,6 +1,7 @@
 # shellcheck shell=bash
-# Sourced by zen-settings (in a stow/bin/ tree), which sets the Zen browser
-# settings saved in the dotfiles, and update-zen-settings, which saves them.
+# Sourced by zen-settings (in a stow/.local/bin/ tree), which sets the Zen
+# browser settings saved in the dotfiles, and update-zen-settings, which saves
+# them.
 # The sourcing script must set repo_root.
 #
 # The settings are in zen/ in any of the directories lib/host-lists reads

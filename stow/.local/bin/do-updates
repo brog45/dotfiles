@@ -12,5 +12,6 @@ fi
 
 # opa has no apt package (see setup.d/install-opa), so its setup step does the
 # update: it replaces an older opa with the latest release.
-repo_root=$(dirname "$(dirname "$(dirname "$(readlink -f "$0")")")")
+# This is stow/.local/bin/do-updates in the repo.
+repo_root=$(dirname "$(dirname "$(dirname "$(dirname "$(readlink -f "$0")")")")")
 "$repo_root/setup.d/install-opa"

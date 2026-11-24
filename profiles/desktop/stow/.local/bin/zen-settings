@@ -18,7 +18,7 @@ set -euo pipefail
 # zen/user.js, which go in the profile's user.js: Zen sets them on every
 # start, and never writes the file.
 
-# This is in a stow/bin/ tree at the repo root, or in a profile or host
+# This is in a stow/.local/bin/ tree at the repo root, or in a profile or host
 # directory, so look up from it for the repo root.
 repo_root=$(dirname "$(readlink -f "$0")")
 while [ ! -f "$repo_root/lib/host-lists" ]; do
