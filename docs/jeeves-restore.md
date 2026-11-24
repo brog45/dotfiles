@@ -1,8 +1,8 @@
 # Moving jeeves into a VM: backup and restore
 
-Status: implemented (`backup-host`, `lib/backup` and the setup steps below)
-and tested (`tests/backup-test`, `tests/syncthing-restore-test`); not yet
-used for the move.
+Status: implemented (`backup-host`, `lib/backup` and the setup steps below),
+tested (`tests/backup-test`, `tests/syncthing-restore-test`), and used for
+the move: the jeeves VM was set up and restored on 2026-11-24.
 
 jeeves's hardware becomes a Proxmox host named moxie. jeeves itself becomes a
 Debian trixie VM on moxie, rebuilt by this repo's `setup` and restored from
