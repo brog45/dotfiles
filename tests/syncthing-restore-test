@@ -77,6 +77,9 @@ check() {
     fi
 }
 
+# The last st_make_folders output lacks the line $1.
+lacks_line() { ! grep -qxF -- "$1" <<<"$out"; }
+
 # A free TCP port on localhost.
 free_port() {
     local port
@@ -147,32 +150,56 @@ peer config devices "$hub_id" addresses add "tcp://127.0.0.1:$hub_port"
 hub config devices add --device-id "$peer_id" --name peer
 hub config devices "$peer_id" addresses add "tcp://127.0.0.1:$peer_port"
 
+# jeeves keeps the folder at a path that links to ~/Docs, as it keeps Music.
 mkdir -p "$peer_home/Docs/sub" "$hub_home/Docs"
+ln -s Docs "$hub_home/docs-id"
 echo one >"$peer_home/Docs/a.txt"
 echo two >"$peer_home/Docs/sub/b.txt"
 head -c 100000 /dev/urandom >"$peer_home/Docs/c.bin"
 peer config folders add --id docs --label Docs --path '~/Docs'
 peer config folders docs devices add --device-id "$hub_id"
-hub config folders add --id docs --label Docs --path '~/Docs'
+hub config folders add --id docs --label Docs --path '~/docs-id'
 hub config folders docs devices add --device-id "$peer_id"
 
 check 'jeeves first gets the files' wait_synced "$hub_home"
 
-# Back up what lib/backup's syncthing item holds, and reinstall jeeves.
+# The paths in home $1 that lib/backup's syncthing item backs up, as
+# backup-host finds them. In a subshell, since lib/backup sets an EXIT trap.
+item_paths() {
+    (
+        export HOME=$1 DOTFILES_HOST=jeeves
+        repo_root=$repo
+        # shellcheck source=lib/host-lists
+        . "$repo/lib/host-lists"
+        # shellcheck source=lib/terminal
+        . "$repo/lib/terminal"
+        # shellcheck source=lib/backup
+        . "$repo/lib/backup"
+        trap - EXIT
+        item_spec syncthing
+        cd "$HOME" || exit 1
+        for path in "${item_paths[@]}"; do
+            compgen -G "$path" || true
+        done
+    )
+}
+
+# Back up what the syncthing item holds, and reinstall jeeves.
 state=.local/state/syncthing
-mkdir -p "$work/backup"
-for f in cert.pem key.pem https-cert.pem https-key.pem config.xml; do
-    [ -e "$hub_home/$state/$f" ] && cp -p "$hub_home/$state/$f" "$work/backup/"
-done
+mapfile -t paths < <(item_paths "$hub_home")
+check "the folder's link is backed up" grep -qx docs-id < <(printf '%s\n' "${paths[@]}")
+check 'the database is not' [ -z "$(printf '%s\n' "${paths[@]}" | grep index)" ]
+tar -C "$hub_home" -cf "$work/syncthing.tar" -- "${paths[@]}"
 stop_instance "$hub_home"
 rm -rf "$hub_home"
-mkdir -p "$hub_home/$state"
-cp -p "$work/backup/"* "$hub_home/$state/"
+mkdir -p "$hub_home"
+tar -C "$hub_home" -xpf "$work/syncthing.tar"
 
 out=$(HOME=$hub_home st_make_folders "$hub_home/$state/config.xml")
-check 'st_make_folders makes the folder' [ -d "$hub_home/Docs" ]
-check 'with its marker' [ -d "$hub_home/Docs/.stfolder" ]
-check 'and says so' grep -q 'Made ~/Docs' <<<"$out"
+check 'st_make_folders makes the folder where its link points' [ -d "$hub_home/Docs/.stfolder" ]
+check 'keeping the link' [ -L "$hub_home/docs-id" ]
+check 'and says so' grep -q 'Made ~/docs-id' <<<"$out"
+check 'it skips the template under <defaults>' lacks_line 'Made ~ for Syncthing to fill'
 
 start "$hub_home"
 check 'jeeves keeps its device ID' grep -q "$hub_id" < <(hub show system)

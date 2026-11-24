@@ -29,17 +29,28 @@ backend_state() {
 state=$(backend_state)
 if [[ $state == NeedsLogin || $state == NoState ]] && restore_wanted tailscale; then
     state_dir=$backup_sysroot/var/lib/tailscale
+    # Before stopping tailscaled, so that a mistyped passphrase leaves it
+    # running.
+    backup_load_identity
     sudo systemctl stop tailscaled
     # The new install's own state is a node that never logged in.
     sudo rm -rf "$state_dir"
     restore_item tailscale
     sudo systemctl start tailscaled
-    for _ in $(seq 30); do
+    # Until it settles: Starting passes on the way to Running.
+    for _ in $(seq 60); do
         state=$(backend_state)
-        [[ -n $state && $state != NoState ]] && break
+        [[ $state == Running || $state == NeedsLogin || $state == NeedsMachineAuth || $state == Stopped ]] && break
         sleep 1
     done
-    echo "Tailscale is back as $host's node: $state"
+    if [[ $state != Running ]]; then
+        # `tailscale up` below would refuse anyway, unless given every
+        # setting the restored node has (such as --ssh).
+        echo "Tailscale was restored as $host's node, but is $state rather than running." >&2
+        echo "Check \`tailscale status\`, and bring it up with the settings it asks for." >&2
+        exit 1
+    fi
+    echo "Tailscale is back as $host's node"
 fi
 
 # Set the operator first, so `tailscale up` below runs without sudo. `set`

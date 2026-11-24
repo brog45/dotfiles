@@ -60,11 +60,20 @@ Facts about the old jeeves, kept for after it is gone:
 Only after the final backup (`./backup-host --final`) has passed its check
 and the old jeeves is powered off: installing on the NVMe destroys it.
 
+**Unplug the Seagate first,** and keep it unplugged until moxie is installed
+and the SATA SSD's storage pool exists. Both it and the SATA SSD are 1 TB,
+and the Seagate is the one with partitions, so a disk chosen by size or by
+having partitions could be the drive holding every backup. Plugged in, it
+would likely be `/dev/sda` in the installer, perhaps its default target
+(unverified). Pick disks by model only: the NVMe is the Samsung
+`MZVLW256HEHP`, the SATA SSD the `Inland SATA SSD`, and the Seagate shows as
+`Portable`. Under `/dev/disk/by-id/` their names carry the model too.
+
 1. In the installer:
-   - **Target disk:** the NVMe. Filesystem **ext4**. Under the disk's
-     advanced options, set a small root size (`maxroot`), for example
-     32 GB, so that most of the NVMe goes to `local-lvm`. What the installer
-     would otherwise choose is unverified.
+   - **Target disk:** the NVMe, the Samsung `MZVLW256HEHP`. Filesystem
+     **ext4**. Under the disk's advanced options, set a small root size
+     (`maxroot`), for example 32 GB, so that most of the NVMe goes to
+     `local-lvm`. What the installer would otherwise choose is unverified.
    - **Hostname:** `moxie.lan` (the installer wants a full name).
    - **Network:** the installer gives moxie a static address. Use one the
      router will not hand to anything else (reserve it, or take one outside
@@ -75,8 +84,11 @@ and the old jeeves is powered off: installing on the NVMe destroys it.
    - Switch from the enterprise repository, which needs a subscription, to
      the no-subscription one, and update. The "no valid subscription" notice
      at login is harmless.
-   - Make the SATA SSD a second LVM-Thin storage (moxie, Disks, LVM-Thin,
-     Create). If it shows partitions, wipe it first (Disks, Wipe Disk).
+   - Make the SATA SSD, the `Inland SATA SSD`, a second LVM-Thin storage
+     (moxie, Disks, LVM-Thin, Create). It is new and has no partitions, so
+     it needs no wiping; a disk there that does have partitions is not it.
+   - Only then plug the Seagate back in, to pass it through to the jeeves
+     VM.
    - Optional, undecided: Tailscale on moxie, to reach its web UI away from
      home.
 

@@ -15,15 +15,20 @@ Syncthing device, same mail.
 1. On the old jeeves, install `age` and `zstd` (`sudo apt install age zstd`),
    and run `./backup-host` once ahead of time: the first run makes the key
    pair, asking for its passphrase.
-2. Run the final backup (`./backup-host --final`), which checks every
+2. Bring felixblue online and let Syncthing finish with it. It is the only
+   other machine with jeeves's Downloads folder, and it and pinelet the only
+   ones with Desktop; when felixblue was last online (2026-11-21) it had
+   both complete, but Downloads has changed on jeeves since.
+3. Run the final backup (`./backup-host --final`), which checks every
    archive, and power off.
-3. Install Proxmox on the hardware, named moxie, as `docs/moxie.md`
-   describes. Installing it destroys the old jeeves.
-4. On moxie, create the jeeves VM and install Debian trixie, with the first
+4. Install Proxmox on the hardware, named moxie, as `docs/moxie.md`
+   describes, with the Seagate unplugged. Installing it destroys the old
+   jeeves.
+5. On moxie, create the jeeves VM and install Debian trixie, with the first
    user `brogers`. That user gets UID 1000, as now; the archives keep numeric
    owners, so this matters. Pass the Seagate's USB device through to the VM.
    `docs/moxie.md` has the VM's settings.
-5. Check that `jeeves.lan` reaches the VM. Its NIC has a new MAC address, so
+6. Check that `jeeves.lan` reaches the VM. Its NIC has a new MAC address, so
    it likely gets a new LAN address, but nothing uses the address itself,
    only the name, and the router likely names DHCP clients by the hostname
    they send. If the name does not follow, either:
@@ -35,21 +40,30 @@ Syncthing device, same mail.
    Until then little breaks: over the tailnet `jeeves` resolves anyway, and
    only dinky, which is not on Tailscale, uses `jeeves.lan`, and only in its
    `jeeves-ssh-key` setup step.
-6. In the VM, clone this repo and run `./setup`. It mounts the drive at
-   `/mnt/backups` (the `install-etc` step installs `mnt-backups.mount`, as
-   now), asks once for the backup passphrase, and restores each item below
-   as it gets to the step that sets that thing up.
-7. Check from another machine that jeeves is back as itself:
+7. In the VM, clone this repo and run the steps up to the packages first:
+
+       ./setup install-stow remove-and-block-packages install-etc \
+           apt-https apt-update install-packages-leaves
+
+   That mounts the drive at `/mnt/backups` (the `install-etc` step installs
+   `mnt-backups.mount`, as now) and installs trixie's Syncthing (1.29.5;
+   the restore was tested with 1.27). Check that it still fetches rather
+   than deletes, before the real folders are at stake:
+   `sudo apt install -y jq`, then `tests/syncthing-restore-test`. If it
+   fails, stop: pause the folders on the other machines before going on.
+8. Run `./setup`. It asks once for the backup passphrase, and restores each
+   item below as it gets to the step that sets that thing up.
+9. Check from another machine that jeeves is back as itself:
    - `ssh jeeves` connects with no warning of a changed host key (the
      fingerprints are in `docs/moxie.md`).
    - `tailscale status` lists `jeeves` and `immich`, with no `jeeves-1`.
    - Syncthing on larry or felixblue shows jeeves connected, and jeeves's
      folders fill without anything being deleted elsewhere.
-8. By hand, once Syncthing has fetched `~/Pictures`: `./setup immich`, which
-   starts Immich, and then check `https://immich.<tailnet>.ts.net`.
-9. By hand, as described below: set up ssh-fetch-mail for each remote host,
-   reinstall job-boards-tracker's crontab lines, and set the Claude Code
-   environments to start automatically (still on the to-do list).
+10. By hand, once Syncthing has fetched `~/Pictures`: `./setup immich`, which
+    starts Immich, and then check `https://immich.<tailnet>.ts.net`.
+11. By hand, as described below: set up ssh-fetch-mail for each remote host,
+    reinstall job-boards-tracker's crontab lines, and set the Claude Code
+    environments to start automatically (still on the to-do list).
 
 ## What is backed up
 
@@ -61,9 +75,9 @@ listed in `hosts/jeeves/backup.txt` and defined in `lib/backup`.
 | `ssh-host-keys` | `/etc/ssh/ssh_host_*` | new `ssh-host-keys` step | the backup's keys differ from the installed ones (asks first) |
 | `ssh` | `~/.ssh` (keys, `authorized_keys`, `config`, `known_hosts`) | `ssh-key` | there is no `~/.ssh/id_ed25519` |
 | `tailscale` | `/var/lib/tailscale` (the jeeves node and its `tailscale serve` config) | `tailscale` | tailscaled is not logged in |
-| `syncthing` | `cert.pem`, `key.pem`, `https-cert.pem`, `https-key.pem`, `config.xml` from `~/.local/state/syncthing` | `syncthing` | there is no Syncthing config yet |
+| `syncthing` | `cert.pem`, `key.pem`, `https-cert.pem`, `https-key.pem`, `config.xml` from `~/.local/state/syncthing`, and each folder path in your home directory that is a link (`~/nem3f-qabxg`, which is `~/Music`) | `syncthing` | there is no Syncthing config yet |
 | `immich` | `/srv/immich` (uploads, database, `.env`, the immich node's Tailscale login, `image-digests.txt`) | `immich` | `/srv/immich` has no database yet |
-| `maildir` | `~/Maildir` | new `restore-home` step | `~/Maildir` is missing or empty |
+| `maildir` | `~/Maildir`, and ssh-fetch-mail's staging directory `~/.local/state/ssh-fetch-mail` | new `restore-home` step | `~/Maildir` is missing or empty |
 | `src` | the whole of `~/src` | `restore-home` | `~/src` is missing or empty |
 | `config` | `~/.config` (1.4 GB, nearly all of it VS Code's leftovers in `Code/`) | new `restore-config` | file by file: each one only if it does not exist yet |
 | `claude` | `~/.claude`, `~/.claude.json` | `restore-home` | `~/.claude` has no `projects/` |
@@ -71,9 +85,11 @@ listed in `hosts/jeeves/backup.txt` and defined in `lib/backup`.
 
 Not backed up, on purpose:
 
-- **The Syncthing folders** (`~/Documents`, `~/Dropbox`, `~/Music`,
-  `~/Pictures`). Each is complete on another machine, so jeeves pulls them
-  back. Its index database is not restored either (see Safety).
+- **The Syncthing folders:** Documents, Dropbox, Music and Pictures, which
+  larry, felixblue and others have, and Downloads and Desktop, which only
+  felixblue (and, for Desktop, pinelet) has. Each is complete on another
+  machine, so jeeves pulls them back. Its index database is not restored
+  either (see Safety).
 - **What setup rebuilds anyway:** packages, flatpaks, dotfiles, Docker images
   other than Immich's.
 
@@ -92,7 +108,11 @@ run its `setup-home-server` once per remote host (now the SSH aliases
 `dinky-mail` and `thoughtsandprayers-mail`, whose keys and aliases come back
 with `~/.ssh`). That sets up Postfix, Dovecot and the fetch timers. Until
 then mail waits on the remote hosts; the `tailscale serve` ports come back
-with the Tailscale state, but nothing answers behind them.
+with the Tailscale state, but nothing answers behind them. The timers
+themselves come back with `~/.config` (`systemd/user/`), and since your user
+services run without a login, they fire every 5 minutes and fail until
+`setup-home-server` puts back the `~/.local/bin/ssh-fetch-mail` they run.
+That loses no mail.
 
 ## Encryption
 
@@ -140,8 +160,10 @@ restoring steps source, so the two cannot drift apart.
   passphrase once (`--no-verify` skips that).
 - `--final` also stops the ssh-fetch-mail timers before archiving
   `~/Maildir`, so that no mail is delivered to the old jeeves after it is
-  archived. Undelivered mail waits on the remote hosts. It leaves Immich and
-  the timers stopped, and says to power off.
+  archived, and waits for a fetch already running to finish rather than
+  stop it midway. Undelivered mail waits on the remote hosts. It leaves
+  Immich and the timers stopped, and says to power off.
+- Otherwise Immich is started again as soon as its archive is written.
 
 The archives come to about 57 GB before compression (`~/src` 25 GB,
 `/srv/immich` 29 GB, `~/.config` 1.4 GB); the

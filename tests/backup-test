@@ -139,10 +139,28 @@ echo mail >"$HOME/Maildir/new/1"
 echo memory >"$HOME/.claude/projects/p/memory.md"
 echo '{}' >"$HOME/.claude.json"
 echo '- a task' >"$BACKUP_REPO_DIR/todo.md"
-for f in cert.pem key.pem https-cert.pem https-key.pem config.xml; do
+for f in cert.pem key.pem https-cert.pem https-key.pem; do
     echo "$f" >"$HOME/.local/state/syncthing/$f"
 done
-mkdir -p "$HOME/.local/state/syncthing/index-v0.14.0.db"
+# A folder at a path that links to ~/Music, as on jeeves, and the template
+# under <defaults>, whose path is ~.
+cat >"$HOME/.local/state/syncthing/config.xml" <<'EOF'
+<configuration>
+    <folder id="docs-1" label="Documents" path="~/Documents" type="sendreceive">
+    </folder>
+    <folder id="music-1" label="Music" path="~/music-id" type="sendreceive">
+    </folder>
+    <defaults>
+        <folder id="" label="" path="~" type="sendreceive">
+        </folder>
+    </defaults>
+</configuration>
+EOF
+mkdir -p "$HOME/.local/state/syncthing/index-v0.14.0.db" "$HOME/Music" "$HOME/Documents"
+ln -s Music "$HOME/music-id"
+# A message ssh-fetch-mail took off a remote host but has not delivered.
+mkdir -p "$HOME/.local/state/ssh-fetch-mail/dinky-mail_/new"
+echo staged >"$HOME/.local/state/ssh-fetch-mail/dinky-mail_/new/2"
 mkdir -p "$BACKUP_SYSROOT/etc/ssh" "$BACKUP_SYSROOT/var/lib/tailscale" "$IMMICH_DIR/postgres" \
     "$IMMICH_DIR/tailscale"
 echo immich-node >"$IMMICH_DIR/tailscale/tailscaled.state"
@@ -164,6 +182,9 @@ check 'the archives are checked' grep -q 'decrypt and list' <<<"$out"
 check 'only the host keys are backed up from /etc/ssh' \
     [ "$(listing ssh-host-keys | sort | tr '\n' ' ')" = 'etc/ssh/ssh_host_ed25519_key etc/ssh/ssh_host_ed25519_key.pub ' ]
 check "Syncthing's database is not backed up" lacks index-v0.14.0.db < <(listing syncthing)
+check "a Syncthing folder's link is backed up" grep -qx music-id < <(listing syncthing)
+check 'a folder that is not a link is not' lacks Documents < <(listing syncthing)
+check "ssh-fetch-mail's staged mail is backed up" grep -qx .local/state/ssh-fetch-mail/dinky-mail_/new/2 < <(listing maildir)
 check 'Immich is stopped to back it up' grep -q "docker compose -f $IMMICH_DIR/compose.yaml stop" "$LOG"
 check 'Immich is started again' grep -q "docker compose -f $IMMICH_DIR/compose.yaml start" "$LOG"
 check 'the image digests are saved' grep -qx 'ghcr.io/immich-app/immich-server:v3 ghcr.io/immich-app/immich-server@sha256:1111' "$IMMICH_DIR/image-digests.txt"
@@ -178,6 +199,13 @@ check '--no-verify skips the check' lacks 'decrypt and list' <<<"$out"
 
 run "$repo/backup-host" nonsense
 check 'an item not in backup.txt is refused' [ "$rc" -ne 0 ]
+
+run "$repo/backup-host" --final --no-verify immich maildir
+check 'a final backup succeeds' [ "$rc" -eq 0 ]
+check "it stops ssh-fetch-mail's timers" grep -qx 'systemctl --user stop ssh-fetch-mail@\*.timer' "$LOG"
+check 'but not a fetch that is running' lacks 'stop ssh-fetch-mail@\*.service' "$LOG"
+check 'it leaves Immich stopped' lacks 'compose.* start' "$LOG"
+check 'and says to power off' grep -q 'Power off' <<<"$out"
 
 # The old machine restores nothing.
 for step in restore-config ssh-key ssh-host-keys tailscale restore-home immich; do
@@ -241,6 +269,7 @@ check 'no new login is asked for' lacks 'tailscale up' "$LOG"
 run "$repo/setup.d/restore-home"
 check 'restore-home succeeds' [ "$rc" -eq 0 ]
 check '~/Maildir is restored' grep -qx mail "$HOME/Maildir/new/1"
+check "with ssh-fetch-mail's staged mail" grep -qx staged "$HOME/.local/state/ssh-fetch-mail/dinky-mail_/new/2"
 check '~/src is restored' grep -qx code "$HOME/src/repo/main.c"
 check "Claude Code's memory is restored" grep -qx memory "$HOME/.claude/projects/p/memory.md"
 check '~/.claude.json is restored' [ -f "$HOME/.claude.json" ]

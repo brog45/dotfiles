@@ -247,7 +247,9 @@ passphrase for the private key; after that, backing up needs none, and the
 check at the end, which decrypts and lists each new archive, asks for it once
 (`--no-verify` skips it). Name items to back up only those. `--final` is for
 the last backup before a reinstall: it also stops the ssh-fetch-mail timers,
-and leaves them and Immich stopped. It needs `age` and `zstd`.
+waiting for a fetch already running to finish, and leaves them and Immich
+stopped; otherwise Immich is started again as soon as it is archived. It
+needs `age` and `zstd`.
 
 On a new install, the setup steps that set each thing up restore it first,
 asking for the passphrase once: `restore-config` (`~/.config`, keeping files
@@ -256,8 +258,9 @@ already there), `immich`, `ssh-key`, `ssh-host-keys` (after asking),
 the folders back rather than deleting them elsewhere), `tailscale` and
 `restore-home` (`~/Maildir`, `~/src`, `~/.claude`, `todo.md`). A step
 restores only what is not set up yet, and each item at most once, so
-rerunning `setup`, or running it on the machine backed up, restores nothing. Without the drive, the
-steps that would otherwise give the machine a new identity stop; set
+rerunning `setup`, or running it on the machine backed up, restores
+nothing. Without the drive, the steps that would otherwise give the machine
+a new identity stop; set
 `DOTFILES_NO_RESTORE=1` to set it up afresh. `lib/backup` has the details,
 `docs/jeeves-restore.md` the plan for moving jeeves into a VM, and
 `docs/moxie.md` the decisions for moxie, the Proxmox host it moves to.

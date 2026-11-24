@@ -3,6 +3,7 @@
 # moving it to a new install: backup-host writes them, and the setup.d steps
 # that set each thing up restore it from them. Sourced by both; the sourcing
 # script must set repo_root and source lib/host-lists and lib/terminal first.
+# Sources lib/syncthing, for the Syncthing folders' paths.
 # docs/jeeves-restore.md has the design.
 #
 # hosts/<host>/backup.txt lists the items backed up for a host; item_spec
@@ -26,6 +27,9 @@
 # instead of identity.age.
 #
 # Needs age, zstd and GNU tar.
+
+# shellcheck source=lib/syncthing disable=SC2154  # repo_root is the caller's
+. "$repo_root/lib/syncthing"
 
 # shellcheck disable=SC2154  # host and host_dir come from lib/host-lists
 {
@@ -77,8 +81,20 @@ item_spec() {
             ;;
         syncthing)
             # Its identity and config, not its database: see setup.d/syncthing.
+            # Also any folder whose path in your home directory is a link (on
+            # jeeves, ~/nem3f-qabxg is ~/Music), so that it fills where it did.
             item_required=yes
             item_paths=(.local/state/syncthing/{cert.pem,key.pem,https-cert.pem,https-key.pem,config.xml})
+            local config=$HOME/.local/state/syncthing/config.xml path
+            if [[ -f $config ]]; then
+                while IFS= read -r path; do
+                    path=${path/#\~\//}
+                    path=${path#"$HOME"/}
+                    if [[ $path != /* && -L $HOME/$path ]]; then
+                        item_paths+=("$path")
+                    fi
+                done < <(st_folder_paths "$config")
+            fi
             ;;
         immich)
             # Some of the Tailscale container's files are root's.
@@ -86,7 +102,11 @@ item_spec() {
             item_base=$(dirname "$dir") item_root=yes item_required=yes
             item_paths=("$(basename "$dir")")
             ;;
-        maildir) item_paths=(Maildir) ;;
+        maildir)
+            # With ssh-fetch-mail's staging directory: a message fetched but
+            # not yet delivered is there, and no longer on the remote host.
+            item_paths=(Maildir .local/state/ssh-fetch-mail)
+            ;;
         src) item_paths=(src) ;;
         config) item_paths=(.config) ;;
         claude) item_paths=(.claude .claude.json) ;;

@@ -102,6 +102,7 @@ elif [[ ! -e $identity ]]; then
 fi
 
 written=()
+immich_stopped=false
 
 # Archive the item NAME, replacing its last archive once the new one is
 # complete. tar's status 1 means that a file changed while it was read, which
@@ -204,16 +205,41 @@ backup_immich() {
     mv "$dir/image-digests.txt.new" "$dir/image-digests.txt"
     echo "Stopping Immich"
     "${docker[@]}" compose -f "$immich_compose" stop
-    if ! $final; then
-        # Even if archiving fails.
-        backup_on_exit start_immich
+    if $final; then
+        archive_item immich
+        return
     fi
+    # Started again as soon as it is archived, or as the script exits if
+    # archiving fails.
+    immich_stopped=true
+    # shellcheck disable=SC2016  # expanded when the script exits
+    backup_on_exit '! $immich_stopped || start_immich'
     archive_item immich
+    start_immich
+    # shellcheck disable=SC2034  # read by the exit command above
+    immich_stopped=false
+}
+
+# Stop ssh-fetch-mail's timers, so that no more mail is fetched, and wait for
+# a fetch already running to finish. Stopping one could leave messages it has
+# taken off the remote host in its staging directory; the maildir item backs
+# that up too, but a finished fetch has delivered them.
+stop_mail() {
+    local _
+    echo "Stopping ssh-fetch-mail's timers, so that no more mail arrives here"
+    systemctl --user stop 'ssh-fetch-mail@*.timer'
+    for _ in $(seq 120); do
+        if [[ -z $(systemctl --user list-units --state=activating,active --no-legend 'ssh-fetch-mail@*.service') ]]; then
+            return 0
+        fi
+        sleep 1
+    done
+    echo "An ssh-fetch-mail fetch is still running after 2 minutes; rerun once it is done" >&2
+    exit 1
 }
 
 if $final; then
-    echo "Stopping ssh-fetch-mail's timers, so that no more mail arrives here"
-    systemctl --user stop 'ssh-fetch-mail@*.timer' 'ssh-fetch-mail@*.service'
+    stop_mail
 fi
 
 for item in "${items[@]}"; do
