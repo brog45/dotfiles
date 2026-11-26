@@ -83,7 +83,18 @@ would likely be `/dev/sda` in the installer, perhaps its default target
 2. After the install:
    - Switch from the enterprise repository, which needs a subscription, to
      the no-subscription one, and update. The "no valid subscription" notice
-     at login is harmless.
+     at login is harmless. In the web UI, under moxie, Updates, Repositories:
+     1. Select the `pve-enterprise` repository and click **Disable**. Do the
+        same for the Ceph enterprise one, if it is listed. moxie does not use
+        Ceph, but an enabled enterprise repository makes every `apt update`
+        fail.
+     2. Click **Add**, choose **No-Subscription**, and click Add. Click OK on
+        the warning that it is not for production.
+     3. Under Updates, click **Refresh** (which runs `apt update`), then
+        **Upgrade**, which opens a shell running the upgrade. Reboot if it
+        installs a new kernel.
+
+     Once that is done, the Repositories page should show no errors.
    - Make the SATA SSD, the `Inland SATA SSD`, a second LVM-Thin storage
      (moxie, Disks, LVM-Thin, Create). It is new and has no partitions, so
      it needs no wiping; a disk there that does have partitions is not it.
