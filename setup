@@ -55,10 +55,20 @@ if [ $# -gt 0 ]; then
     steps=("$@")
 fi
 
-if ! groups | tr ' ' '\n' | grep -qx sudo; then
-    echo "Adding $USER to the sudo group"
+if ! groups | tr ' ' '\n' | grep -qxE 'sudo|wheel'; then
+    if grep -q '^sudo:' /etc/group; then
+        # Debian and its descendants use the `sudo` group
+        sudo_group=sudo
+    elif grep -q '^wheel:' /etc/group; then
+        # Arch
+        sudo_group=wheel
+    else
+        echo Unable to determine sudo group >&2
+        exit 1
+    fi
+    echo "Adding $USER to the $sudo_group group"
     echo "Enter the root password"
-    su -c "/usr/sbin/usermod -aG sudo $USER"
+    su -c "/usr/sbin/usermod -aG $sudo_group $USER"
 
     echo 'Using "exec su ..." to continue with the sudo group'
     echo "Enter your own password"
